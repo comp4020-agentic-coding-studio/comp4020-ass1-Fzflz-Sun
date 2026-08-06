@@ -31,19 +31,28 @@ untouched, either the job was tiny or nobody read it.
   share. When utilisation on an axle exceeds 1, that axle's achievable force
   clamps, and the car visibly runs wide (front saturates) or rotates (rear
   saturates).
-- **The core interaction, stated testably**: holding the throttle control
-  (button, pointer, `ArrowUp`/`W`) while the steering control is deflected
+- **The core interaction, stated testably**: the car sits at rest
+  indefinitely on load or after `data-testid="reset"` — nothing moves until
+  the visitor presses `data-testid="start-run"` to enter the corner at a
+  documented entry speed. Holding the throttle control (button, pointer,
+  `ArrowUp`/`W`) while the steering control is deflected
   (`ArrowLeft`/`ArrowRight`/`A`/`D`, or the on-screen steering control)
   increases `data-testid="front-utilisation"` and/or
-  `data-testid="rear-utilisation"` in the instrument panel in real time; once
-  combined demand exceeds 100% on an axle, `data-testid="state-label"`'s text
-  changes from `Stable` to `Understeer`, `Oversteer`, or `Four-wheel slide`,
-  `data-testid="state-explanation"` updates to name the saturated axle in
-  plain language, and the car's position visibly departs from the reference
-  line drawn through the corner. Switching `data-testid="drivetrain-*"`
-  changes which axle reaches saturation first for the same inputs; switching
-  `data-testid="surface-*"` changes how much throttle/steering combination it
-  takes to reach saturation at all.
+  `data-testid="rear-utilisation"` in the instrument panel in real time, and
+  `data-testid="speed"` and `data-testid="path-offset"` show the car actually
+  moving and departing from the reference line, not just the percentages
+  changing; once combined demand exceeds 100% on an axle,
+  `data-testid="state-label"`'s text changes from `Stable` to `Understeer`,
+  `Oversteer`, or `Four-wheel slide`, `data-testid="state-explanation"`
+  updates to name the saturated axle in plain language, and the car's
+  position visibly departs from the reference line drawn through the corner.
+  Switching `data-testid="drivetrain-*"` changes which axle reaches
+  saturation first for the same inputs; switching `data-testid="surface-*"`
+  changes how much throttle/steering combination it takes to reach
+  saturation at all. Steering at a fixed dry-baseline fraction of full lock
+  (see `DRY_BASELINE_STEERING_FRACTION` in `docs/model-assumptions.md`) is
+  the reference input that should track the corner's reference line on a dry
+  surface from the documented entry speed.
 - **Audience**: someone with everyday car-passenger intuition (turning,
   speeding up, braking are all familiar) but no vehicle-dynamics background.
   They do not need to know what a friction circle, slip angle, or bicycle
@@ -63,8 +72,11 @@ untouched, either the job was tiny or nobody read it.
   without losing simulation state or throwing console errors; a
   `prefers-reduced-motion` visitor still gets the full instrument-panel
   explanation even with camera motion and easing reduced; a visitor who
-  never touches the surface/drivetrain controls still reaches a saturation
-  state within the default corner and forgiving first-run configuration.
+  never touches the surface/drivetrain controls, but does press
+  `data-testid="start-run"`, still reaches a saturation state within the
+  default corner and forgiving first-run configuration; releasing every
+  pedal brings the car to and holds it at a true stop rather than coasting
+  indefinitely or reversing through zero.
 
 ## Model assumptions (must stay visible, not just in code)
 
@@ -101,6 +113,17 @@ Also machine-checkable, in `src/simulation/*.test.ts` (unit, no DOM/WebGL):
 - Reset returns to the same deterministic initial state every time.
 - The same input sequence produces the same output sequence (no hidden
   randomness).
+- Load and Reset leave the car at rest indefinitely; only `startRun` puts it
+  in motion (`src/simulation/behaviour.test.ts`).
+- Releasing throttle and brake brings the car to, and holds it at, exactly
+  zero speed rather than coasting forever or reversing through zero
+  (`src/simulation/behaviour.test.ts`).
+- Unsaturated dry-baseline steering from the documented entry speed produces
+  a bounded path error against the corner's reference line
+  (`src/simulation/behaviour.test.ts`).
+- Identical scripts on wet/ice reach rear-axle saturation earlier, and show
+  more body slip over a sustained run, than the same script on dry
+  (`src/simulation/behaviour.test.ts`).
 
 Judged by a person, not a test — know you're still on the hook for these at
 the crit:

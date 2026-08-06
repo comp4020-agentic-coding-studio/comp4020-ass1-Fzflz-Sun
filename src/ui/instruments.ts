@@ -44,6 +44,8 @@ export function createInstruments(root: ParentNode = document): Instruments {
 
   const stateLabel = testid("state-label");
   const stateExplanation = testid("state-explanation");
+  const speed = testid("speed");
+  const pathOffset = testid("path-offset");
   const frontUtilisation = testid("front-utilisation");
   const rearUtilisation = testid("rear-utilisation");
   const longitudinalG = testid("longitudinal-g");
@@ -90,9 +92,26 @@ export function createInstruments(root: ParentNode = document): Instruments {
   }
 
   function update(state: SimState): void {
-    stateLabel.textContent = STATE_LABEL[state.drivingState];
-    stateLabel.dataset.state = state.drivingState;
-    stateExplanation.textContent = STATE_EXPLANATION[state.drivingState];
+    // "Ready" is a lifecycle phase, not a handling classification (see
+    // RunPhase in types.ts) — the car sits inert until Start begins a run, so
+    // it gets its own label instead of reporting a stale "Stable" from the
+    // last reset that would wrongly imply the car is already rolling.
+    if (state.phase === "ready") {
+      stateLabel.textContent = "Ready";
+      stateLabel.dataset.state = "ready";
+      stateExplanation.textContent = "Press Start to enter the corner at a steady speed.";
+    } else {
+      stateLabel.textContent = STATE_LABEL[state.drivingState];
+      stateLabel.dataset.state = state.drivingState;
+      stateExplanation.textContent = STATE_EXPLANATION[state.drivingState];
+    }
+
+    // Bare motion, independent of any handling classification: utilisation
+    // percentages and state labels can stay green while the car itself never
+    // actually moves or stops (the failure mode bug #6 named) — these are the
+    // DOM's ground truth that it did.
+    speed.textContent = `${Math.hypot(state.vx, state.vy).toFixed(1)} m/s`;
+    pathOffset.textContent = `${state.pathOffset >= 0 ? "+" : ""}${state.pathOffset.toFixed(2)} m`;
 
     frontUtilisation.textContent = formatPercent(state.front.utilisation);
     rearUtilisation.textContent = formatPercent(state.rear.utilisation);

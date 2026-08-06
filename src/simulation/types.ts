@@ -4,6 +4,11 @@
 export type DrivetrainId = "FWD" | "RWD" | "AWD";
 export type SurfaceId = "dry" | "wet" | "ice";
 export type DrivingState = "stable" | "understeer" | "oversteer" | "slide";
+/** Experiment lifecycle, separate from `DrivingState`'s handling
+ * classification: "ready" is the inert state on load/Reset (stationary,
+ * indefinitely, until the driver explicitly starts a run); "running" is a
+ * started run over which handling can be observed. */
+export type RunPhase = "ready" | "running";
 
 /** Which digital controls are currently held down. Produced by the UI layer
  * from keyboard/touch/pointer events; consumed by `rampControls`. */
@@ -64,6 +69,9 @@ export interface SimState {
   surface: SurfaceId;
   /** Simulated seconds since the last reset — never wall-clock time. */
   elapsed: number;
+  /** See `RunPhase`. While "ready", `step` is a no-op: the car sits at rest
+   * indefinitely until `startRun` begins a run. */
+  phase: RunPhase;
 }
 
 export interface SurfacePreset {

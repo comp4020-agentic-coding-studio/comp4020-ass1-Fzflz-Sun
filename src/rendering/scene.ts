@@ -102,7 +102,15 @@ export function createGripScene(canvas: HTMLCanvasElement, track: TrackParams): 
     updateAxleMarker(car.frontMarker, FRONT_COLOR, state.front.utilisation, state.front.saturated);
     updateAxleMarker(car.rearMarker, REAR_COLOR, state.rear.utilisation, state.rear.saturated);
 
-    const forward = new THREE.Vector3(Math.cos(state.heading), 0, -Math.sin(state.heading));
+    // Chase the car's actual direction of travel, not its body heading: a
+    // slide means those two diverge (the body-frame slip angle,
+    // atan2(vy, vx)), and a camera rigidly locked to heading alone keeps the
+    // car dead-centre and pointing "forward" on screen regardless, hiding
+    // exactly the loss-of-control moment this instrument exists to show. At
+    // vx = vy = 0 atan2 is 0, so a stationary or straight-tracking car is
+    // unaffected.
+    const travelHeading = state.heading + Math.atan2(state.vy, state.vx);
+    const forward = new THREE.Vector3(Math.cos(travelHeading), 0, -Math.sin(travelHeading));
     cameraPosTarget
       .copy(forward)
       .multiplyScalar(-9)

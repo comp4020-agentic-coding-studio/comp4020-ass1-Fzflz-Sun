@@ -23,26 +23,28 @@ export const CAR_PARAMS: CarParams = {
   brakeFrontShare: 0.6, // fixed 60/40 front/rear brake bias — illustrative, not universal
   corneringStiffnessFront: 80000, // N/rad, linear tyre model, symmetric front/rear by default
   corneringStiffnessRear: 80000,
-  // rad (~3.4°) "full steering lock" in this teaching model. This is not a
-  // literal wheel angle: it is tuned so full-lock cornering alone consumes
-  // most, but not all, of the dry-surface grip budget (leaving headroom for
-  // drivetrain drive force to be the thing that tips an axle over), while
-  // clearly saturating on the lower-grip surfaces. A larger angle demands
-  // more lateral force than either axle's friction limit can supply the
-  // instant it's applied, saturating both axles at once regardless of
-  // drivetrain — collapsing the understeer/oversteer distinction into
-  // "slide" for every scenario, which is what a first tuning pass at 0.5 rad
-  // did.
-  maxSteerAngle: 0.045,
+  // rad (~4.3°) "full steering lock" in this teaching model. This is not a
+  // literal wheel angle: it is calibrated together with TRACK_PARAMS.radius,
+  // wheelbaseHalf and ENTRY_SPEED as one scenario, not a standalone tuning
+  // knob. A 2.6 m wheelbase following a 45 m-radius corner needs roughly
+  // atan(2.6/45) ≈ 0.058 rad of kinematic steer angle just to match the
+  // road's curvature; DRY_BASELINE_STEERING_FRACTION (physics.ts) of this
+  // value is calibrated to land close to that requirement, so the documented
+  // dry baseline (~70% steering) tracks the reference line, full lock tightens
+  // the line further, and there is still headroom below full lock before the
+  // front axle's lateral capacity is exhausted. The previous value (0.045 rad)
+  // was geometrically incapable of reaching the required curvature at any
+  // steering fraction — the corner would always be run wide regardless of
+  // input, which is exactly the bug this recalibration fixes.
+  maxSteerAngle: 0.08,
   steerRampPerSecond: 2.5, // full lock reached in ~0.4s of held input
   throttleRampPerSecond: 1.2, // full throttle reached in ~0.83s of held input
   brakeRampPerSecond: 3.0, // full brake reached in ~0.33s of held input
-  // m/s; the linear slip-angle model's effective stiffness scales as 1/vx, so
-  // flooring vx too low here makes the fixed-step integration numerically
-  // stiff (visible as an unstable spin blowing up within a few frames) well
-  // before it's physically meaningful. 3 m/s keeps a comfortable stability
-  // margin at FIXED_TIMESTEP without materially changing behaviour at the
-  // cruising speeds this corner uses.
+  // m/s; protects only the atan2 slip-angle denominator from blowing up
+  // numerically at very low speed (see the alphaFront/alphaRear computation
+  // in physics.ts). Must never be used to gate whether braking force is
+  // applied — braking, rolling resistance and the low-speed lateral-force
+  // fade all use the car's *actual* vx, never this floored value.
   minSpeedForSlip: 3,
   maxSpeed: 40, // m/s safety cap, well above anything this corner needs
 };
@@ -60,4 +62,42 @@ export const SURFACE_PRESETS: Record<string, SurfacePreset> = {
   ice: { id: "ice", label: "Ice", mu: 0.3 },
 };
 
-export const INITIAL_SPEED = 15; // m/s (~54 km/h) — the car enters the corner already rolling
+// m/s (~43 km/h) — the speed a run starts at once the driver presses "Enter
+// the corner" (physics.ts's startRun). Calibrated together with the track
+// radius and maxSteerAngle above: fast enough that the corner is a real
+// driving problem, slow enough that the dry baseline's required lateral
+// force stays under each axle's friction-circle limit (so steering alone
+// doesn't saturate an axle before throttle or a low-grip surface does).
+export const ENTRY_SPEED = 12;
+
+// N — a modest constant rolling-resistance force, always opposing the car's
+// current direction of travel while it's moving, independent of the brake
+// pedal and of minSpeedForSlip. Without this, a coasting car (zero throttle,
+// zero brake) never decelerates at all: vxDot has no term that opposes motion
+// unless the driver brakes, so releasing every pedal left the car cruising
+// forever at whatever speed it last reached.
+export const ROLLING_RESISTANCE_FORCE = 400;
+
+// m/s — below this forward speed, lateral tyre force is scaled down toward
+// zero (physics.ts's lateralForceFade), independent of minSpeedForSlip. Fixes
+// steering-while-stationary producing phantom lateral force: at vx = 0, the
+// slip-angle floor (minSpeedForSlip) still leaves alpha equal to the raw
+// steer angle, which without this fade would create real cornering force on
+// a car that isn't rolling.
+export const LOW_SPEED_FADE_SPEED = 1.0;
+
+// m/s — once |vx| drops under this while braking with no throttle applied,
+// the integration snaps vx (and vy, yawRate) to exactly zero instead of
+// asymptotically approaching it. A real brake can hold a stopped car at
+// exactly zero; the alternative (pure force integration) only ever
+// approaches zero in the limit and can overshoot into reverse in one large
+// timestep, which is what the un-clamped version of this fix would do.
+export const AT_REST_SPEED = 0.05;
+
+// Fraction of maxSteerAngle that is this teaching model's "documented dry
+// baseline" corning input — the one input used by the red behavioural tests
+// (src/simulation/behaviour.test.ts) and referenced in spec/brief.md as the
+// steering effort that should track the reference line on a dry surface at
+// ENTRY_SPEED, with full lock available to tighten the line further beyond
+// it. Not a UI default — the driver can still steer anywhere in [-1, 1].
+export const DRY_BASELINE_STEERING_FRACTION = 0.7;

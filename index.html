@@ -8,11 +8,7 @@
   </head>
   <body>
     <div class="app">
-      <header class="site-header">
-        <nav aria-label="Primary">
-          <a href="./">Home</a>
-        </nav>
-      </header>
+      <nav aria-label="Primary"></nav>
       <h1>Grip is a budget</h1>
       <div class="main-area">
         <div class="stage" data-testid="stage">
@@ -25,6 +21,12 @@
             <p data-testid="state-explanation" id="state-explanation">
               Both axles have grip in reserve. Nothing has saturated yet.
             </p>
+          </section>
+
+          <section class="panel">
+            <h2>Motion</h2>
+            <p>Speed: <span data-testid="speed">0.0 m/s</span></p>
+            <p>Path offset: <span data-testid="path-offset">0.00 m</span></p>
           </section>
 
           <section class="panel">
@@ -168,6 +170,9 @@
         </button>
         <button type="button" class="drive-button" id="brake" data-testid="brake" aria-label="Brake">
           ▼
+        </button>
+        <button type="button" id="start-run" data-testid="start-run" aria-label="Start — enter the corner">
+          Start
         </button>
         <button type="button" id="reset" data-testid="reset">Reset</button>
         <div class="control-readouts">

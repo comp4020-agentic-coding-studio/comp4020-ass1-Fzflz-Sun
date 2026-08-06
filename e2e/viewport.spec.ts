@@ -4,9 +4,12 @@ import { expect, test } from "@playwright/test";
 // spec/brief.md's "core interaction, stated testably" into real-browser
 // checks. Runs against the built site via playwright.config.ts's webServer.
 //
-// The interaction: holding the throttle control while steering is deflected
-// raises front/rear axle utilisation; sustained saturation flips the visible
-// state label and explanation, and moves the car off the reference line.
+// The interaction: the car sits at rest ("Ready") until the visitor presses
+// Start, which enters the corner at the documented entry speed. From there,
+// holding the throttle control while steering is deflected raises front/rear
+// axle utilisation; sustained saturation flips the visible state label and
+// explanation, and moves the car off the reference line (readable both from
+// data-testid="speed"/"path-offset" and from the utilisation instruments).
 // Drivetrain and surface controls change how/when that saturation happens.
 const VIEWPORTS = [
   { name: "desktop", width: 1920, height: 1080 },
@@ -54,9 +57,62 @@ for (const viewport of VIEWPORTS) {
       ).toBeLessThanOrEqual(viewport.width);
     });
 
+    test("the car sits at rest until start-run is pressed", async ({ page }) => {
+      await page.goto("/");
+      await page.getByTestId("reset").click();
+      await expect(page.getByTestId("state-label")).toHaveText("Ready");
+      expect(
+        await readNumber(page, "speed"),
+        "the car must be at rest before Start is pressed",
+      ).toBe(0);
+
+      // Driving inputs before Start must be inert — this is the lifecycle
+      // gate itself, not just a cosmetic label.
+      await page.getByTestId("steer-right").dispatchEvent("pointerdown");
+      await holdControl(page, "throttle", 1000);
+      await page.getByTestId("steer-right").dispatchEvent("pointerup");
+      await expect(
+        page.getByTestId("state-label"),
+        "holding throttle/steering before Start must not move the car",
+      ).toHaveText("Ready");
+      expect(await readNumber(page, "speed"), "the car must still be at rest").toBe(0);
+
+      await page.getByTestId("start-run").click();
+      await expect(
+        page.getByTestId("state-label"),
+        "Start should leave the Ready phase for a real driving state",
+      ).not.toHaveText("Ready");
+      expect(
+        await readNumber(page, "speed"),
+        "Start should put the car in motion at the documented entry speed",
+      ).toBeGreaterThan(5);
+    });
+
+    test("speed and path-offset show real motion once running, not just a rising percentage", async ({
+      page,
+    }) => {
+      await page.goto("/");
+      await page.getByTestId("reset").click();
+      await page.getByTestId("start-run").click();
+      const offsetBefore = await readNumber(page, "path-offset");
+
+      await page.getByTestId("steer-right").dispatchEvent("pointerdown");
+      await holdControl(page, "throttle", 1500);
+      await page.getByTestId("steer-right").dispatchEvent("pointerup");
+
+      const speedAfter = await readNumber(page, "speed");
+      const offsetAfter = await readNumber(page, "path-offset");
+      expect(speedAfter, "speed should read real, non-zero motion once running").toBeGreaterThan(1);
+      expect(
+        Math.abs(offsetAfter - offsetBefore),
+        "sustained steering+throttle should move the car off the reference line, not just raise a percentage",
+      ).toBeGreaterThan(0.05);
+    });
+
     test("holding throttle while steering raises axle utilisation, by pointer", async ({ page }) => {
       await page.goto("/");
       await page.getByTestId("reset").click();
+      await page.getByTestId("start-run").click();
       const before = await readNumber(page, "front-utilisation");
       await page.getByTestId("steer-right").dispatchEvent("pointerdown");
       await holdControl(page, "throttle", 1500);
@@ -72,6 +128,7 @@ for (const viewport of VIEWPORTS) {
     }) => {
       await page.goto("/");
       await page.getByTestId("reset").click();
+      await page.getByTestId("start-run").click();
       const before = await readNumber(page, "rear-utilisation");
       await page.keyboard.down("ArrowRight");
       await page.keyboard.down("ArrowUp");
@@ -89,6 +146,7 @@ for (const viewport of VIEWPORTS) {
 
       await page.getByTestId("drivetrain-fwd").click();
       await page.getByTestId("reset").click();
+      await page.getByTestId("start-run").click();
       await page.getByTestId("steer-right").dispatchEvent("pointerdown");
       await holdControl(page, "throttle", 2000);
       const fwdFront = await readNumber(page, "front-utilisation");
@@ -97,6 +155,7 @@ for (const viewport of VIEWPORTS) {
 
       await page.getByTestId("drivetrain-rwd").click();
       await page.getByTestId("reset").click();
+      await page.getByTestId("start-run").click();
       await page.getByTestId("steer-right").dispatchEvent("pointerdown");
       await holdControl(page, "throttle", 2000);
       const rwdFront = await readNumber(page, "front-utilisation");
@@ -117,6 +176,7 @@ for (const viewport of VIEWPORTS) {
 
       await page.getByTestId("surface-dry").click();
       await page.getByTestId("reset").click();
+      await page.getByTestId("start-run").click();
       await page.getByTestId("steer-right").dispatchEvent("pointerdown");
       await holdControl(page, "throttle", 1200);
       const dryUtil = Math.max(
@@ -127,6 +187,7 @@ for (const viewport of VIEWPORTS) {
 
       await page.getByTestId("surface-ice").click();
       await page.getByTestId("reset").click();
+      await page.getByTestId("start-run").click();
       await page.getByTestId("steer-right").dispatchEvent("pointerdown");
       await holdControl(page, "throttle", 1200);
       const iceUtil = Math.max(
@@ -142,16 +203,19 @@ for (const viewport of VIEWPORTS) {
 
     test("reset returns state, steering and utilisation to the initial values", async ({ page }) => {
       await page.goto("/");
+      await page.getByTestId("reset").click();
       const initialState = await page.getByTestId("state-label").textContent();
+      await page.getByTestId("start-run").click();
       await page.getByTestId("steer-right").dispatchEvent("pointerdown");
       await holdControl(page, "throttle", 1500);
       await page.getByTestId("steer-right").dispatchEvent("pointerup");
       await page.getByTestId("reset").click();
-      await expect(page.getByTestId("state-label")).toHaveText(initialState ?? "Stable");
+      await expect(page.getByTestId("state-label")).toHaveText(initialState ?? "Ready");
       const front = await readNumber(page, "front-utilisation");
       const rear = await readNumber(page, "rear-utilisation");
       expect(front, "reset should return front utilisation to (near) zero").toBeLessThan(5);
       expect(rear, "reset should return rear utilisation to (near) zero").toBeLessThan(5);
+      expect(await readNumber(page, "speed"), "reset should return the car to rest").toBe(0);
     });
 
     test("all controls remain keyboard-focusable", async ({ page }) => {
@@ -161,6 +225,7 @@ for (const viewport of VIEWPORTS) {
         "steer-right",
         "throttle",
         "brake",
+        "start-run",
         "reset",
         "drivetrain-fwd",
         "drivetrain-rwd",
@@ -186,6 +251,7 @@ test("survives a resize mid-interaction, keeping simulation state and no console
   });
   await page.goto("/");
   await page.getByTestId("reset").click();
+  await page.getByTestId("start-run").click();
   await page.getByTestId("steer-right").dispatchEvent("pointerdown");
   await holdControl(page, "throttle", 1000);
   const before = await readNumber(page, "front-utilisation");

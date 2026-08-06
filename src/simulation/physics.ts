@@ -1,4 +1,12 @@
-import { CAR_PARAMS, INITIAL_SPEED, SURFACE_PRESETS, TRACK_PARAMS } from "./constants.ts";
+import {
+  AT_REST_SPEED,
+  CAR_PARAMS,
+  ENTRY_SPEED,
+  LOW_SPEED_FADE_SPEED,
+  ROLLING_RESISTANCE_FORCE,
+  SURFACE_PRESETS,
+  TRACK_PARAMS,
+} from "./constants.ts";
 import { pathOffset } from "./track.ts";
 import type {
   AxleState,
@@ -74,7 +82,7 @@ export function createInitialState(
     x: 0,
     y: 0,
     heading: 0,
-    vx: INITIAL_SPEED,
+    vx: 0,
     vy: 0,
     yawRate: 0,
     steering: 0,
@@ -89,6 +97,20 @@ export function createInitialState(
     drivetrain,
     surface,
     elapsed: 0,
+    phase: "ready",
+  };
+}
+
+/** The explicit "Enter the corner" action: begins a run from the given
+ * ready state at the documented entry speed and pose, discarding whatever
+ * partial progress a previous run made. Same drivetrain/surface selection,
+ * same starting position — the only thing that changes run to run is the
+ * driver's input, which is what makes repeat runs a fair comparison. */
+export function startRun(state: SimState): SimState {
+  return {
+    ...createInitialState(state.drivetrain, state.surface),
+    phase: "running",
+    vx: ENTRY_SPEED,
   };
 }
 
@@ -102,6 +124,11 @@ export function step(
   params: CarParams = CAR_PARAMS,
   track: TrackParams = TRACK_PARAMS,
 ): SimState {
+  // The experiment's inert phase: nothing moves until the driver explicitly
+  // starts a run (startRun above), so page load and Reset both leave the car
+  // stationary indefinitely rather than launching it on their own.
+  if (state.phase !== "running") return state;
+
   const delta = controls.steering * params.maxSteerAngle;
   const vxSafe = Math.max(state.vx, params.minSpeedForSlip);
 
@@ -119,11 +146,21 @@ export function step(
   // restoring force into a destabilising one, so any sustained cornering
   // diverges into a spin within a few hundred ms regardless of tuning (see
   // docs/model-assumptions.md).
-  const fyFrontDemand = params.corneringStiffnessFront * alphaFront;
-  const fyRearDemand = params.corneringStiffnessRear * alphaRear;
+  //
+  // lateralForceFade uses the car's *actual* vx (never vxSafe, the floored
+  // value above that only protects the atan2 denominator): below
+  // LOW_SPEED_FADE_SPEED it scales lateral tyre force toward zero, so
+  // steering a stationary or near-stationary car can't manufacture cornering
+  // force out of nothing.
+  const lateralForceFade = Math.max(0, Math.min(1, Math.abs(state.vx) / LOW_SPEED_FADE_SPEED));
+  const fyFrontDemand = params.corneringStiffnessFront * alphaFront * lateralForceFade;
+  const fyRearDemand = params.corneringStiffnessRear * alphaRear * lateralForceFade;
 
   const driveForce = controls.throttle * params.maxEngineForce;
-  const brakeForce = state.vx > params.minSpeedForSlip ? controls.brake * params.maxBrakeForce : 0;
+  // Braking always opposes motion, all the way to zero — minSpeedForSlip is
+  // reserved strictly for the atan2 floor above and must never gate whether
+  // the brake works.
+  const brakeForce = controls.brake * params.maxBrakeForce;
   const split = driveSplit(state.drivetrain);
 
   const fxFrontDemand = driveForce * split.front - brakeForce * params.brakeFrontShare;
@@ -136,7 +173,14 @@ export function step(
   const front = clampAxle(fxFrontDemand, fyFrontDemand, axleLimit);
   const rear = clampAxle(fxRearDemand, fyRearDemand, axleLimit);
 
-  const fxTotal = front.fx + rear.fx;
+  // A modest, constant rolling resistance opposing whatever direction the
+  // car is currently travelling — independent of the brake pedal and of the
+  // tyres' friction-circle budget, so a coasting car (no throttle, no brake)
+  // still bleeds off speed instead of cruising forever at a constant value.
+  const rollingResistance =
+    Math.abs(state.vx) > AT_REST_SPEED ? -Math.sign(state.vx) * ROLLING_RESISTANCE_FORCE : 0;
+
+  const fxTotal = front.fx + rear.fx + rollingResistance;
   const fyTotal = front.fy + rear.fy;
   const yawMoment = params.wheelbaseHalf * front.fy - params.wheelbaseHalf * rear.fy;
 
@@ -159,9 +203,34 @@ export function step(
   // diverging to unbounded numbers instead of settling into a bounded slide.
   const rawSpeed = Math.hypot(rawVx, rawVy);
   const speedScale = rawSpeed > params.maxSpeed ? params.maxSpeed / rawSpeed : 1;
-  const vx = rawVx * speedScale;
-  const vy = rawVy * speedScale;
-  const yawRate = state.yawRate + yawRateDot * dt;
+  let vx = rawVx * speedScale;
+  let vy = rawVy * speedScale;
+  let yawRate = state.yawRate + yawRateDot * dt;
+
+  // Kinematic blend at rest: with no drive force requested, brake and rolling
+  // resistance may only ever slow the car toward zero, never through it —
+  // fxTotal's sign is fixed by the *pedal* input, not by the car's current
+  // direction of travel, so without this clamp a single oversized timestep
+  // (or the very next one, since state.vx stays at exactly 0) would apply
+  // that same force again and accelerate the car backwards. Comparing signs
+  // rather than testing against a speed threshold makes this correct
+  // regardless of the timestep size or how close to zero vx already is: a
+  // sign flip (or already being parked at zero) always means "hold at rest",
+  // not "keep integrating". Steering while parked (this branch, no brake
+  // needed) and braking down to a stop (this branch, once the sign flips)
+  // both land here — that's why it also zeroes yawRate/vy: a car that isn't
+  // rolling can't be yawed or slid sideways by steering alone (see
+  // lateralForceFade above, which already keeps this the common case rather
+  // than the exception).
+  const noDriveForce = controls.throttle === 0;
+  const alreadyAtRest = noDriveForce && state.vx === 0;
+  const crossedThroughRest = noDriveForce && state.vx !== 0 && Math.sign(vx) !== Math.sign(state.vx);
+  if (alreadyAtRest || crossedThroughRest) {
+    vx = 0;
+    vy = 0;
+    yawRate = 0;
+  }
+
   const heading = state.heading + yawRate * dt;
 
   const x = state.x + (vx * Math.cos(heading) - vy * Math.sin(heading)) * dt;

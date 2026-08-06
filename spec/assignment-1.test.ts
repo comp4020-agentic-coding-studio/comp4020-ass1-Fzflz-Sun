@@ -28,6 +28,7 @@ describe("core interaction (assignment-1 spec #4): grip-budget markup contract",
     required("brake", "the visitor must be able to shed speed/add longitudinal demand");
     required("steer-left", "the visitor must be able to add lateral demand one way");
     required("steer-right", "the visitor must be able to add lateral demand the other way");
+    required("start-run", "the visitor must be able to explicitly begin a run rather than one auto-launching");
     required("reset", "the visitor must be able to repeat the same corner from the same start");
   });
 
@@ -50,10 +51,15 @@ describe("core interaction (assignment-1 spec #4): grip-budget markup contract",
     required("steering-value", "the current steering input must be exposed as text");
     required("throttle-value", "the current throttle input must be exposed as text");
     required("brake-value", "the current brake input must be exposed as text");
+    required("speed", "actual motion (not just utilisation percentages) must be readable as text");
+    required(
+      "path-offset",
+      "the car's real trajectory error against the reference line must be readable as text",
+    );
   });
 
   it("all driving controls are real buttons, so Enter/Space and touch both work", () => {
-    for (const testid of ["throttle", "brake", "steer-left", "steer-right", "reset"]) {
+    for (const testid of ["throttle", "brake", "steer-left", "steer-right", "start-run", "reset"]) {
       const el = doc.querySelector(`[data-testid="${testid}"]`);
       expect(el?.tagName, `[data-testid="${testid}"] should be a <button>`).toBe("BUTTON");
     }

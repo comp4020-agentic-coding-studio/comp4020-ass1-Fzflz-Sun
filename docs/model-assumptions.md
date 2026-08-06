@@ -18,10 +18,24 @@ budget; drivetrain only changes which axle receives the throttle share.
 
 ## Tuned constants and why
 
-- **`maxSteerAngle = 0.045 rad` (~2.6°).** Not a literal wheel angle — the
-  smallest value that made "full steering lock" a bounded fraction of the
-  friction circle rather than an instant, drivetrain-independent overload of
-  both axles. See "What went wrong first" below.
+- **`maxSteerAngle = 0.08 rad` (~4.6°).** Not a literal wheel angle — it is
+  calibrated together with `TRACK_PARAMS.radius`, `wheelbaseHalf`, and
+  `ENTRY_SPEED` as one scenario, not a standalone tuning knob. A 2.6 m
+  wheelbase following this model's 45 m-radius corner needs roughly
+  `atan(2.6/45) ≈ 0.058 rad` of kinematic steer angle just to match the
+  road's own curvature; `DRY_BASELINE_STEERING_FRACTION` of this value lands
+  close to that requirement, so the documented dry baseline (~70% steering)
+  tracks the reference line, full lock tightens the line further, and there
+  is still headroom below full lock before the front axle's lateral capacity
+  is exhausted. The previous value (0.045 rad) was geometrically incapable of
+  reaching the required curvature at *any* steering fraction — the corner was
+  always run wide regardless of input, independent of and in addition to the
+  sign bug in "What went wrong first" below.
+- **`ENTRY_SPEED = 12 m/s` (~43 km/h).** The speed a run starts at once the
+  driver presses "Enter the corner" (`startRun`). Calibrated with the track
+  radius and `maxSteerAngle` above: fast enough that the corner is a real
+  driving problem, slow enough that the dry baseline's required lateral force
+  stays under each axle's friction-circle limit on its own.
 - **`maxEngineForce = 4200 N`.** Tuned so full throttle alone, on dry
   surface, sits comfortably under one axle's limit (~71%). The pedagogical
   point is that *combining* throttle with cornering demand on the same axle
@@ -32,18 +46,55 @@ budget; drivetrain only changes which axle receives the throttle share.
   the scale.
 - **`brakeFrontShare = 0.6`.** One illustrative fixed bias, not a claim about
   any real car's brake balance.
-- **`minSpeedForSlip = 3 m/s`.** Floors the speed used inside the slip-angle
-  `atan2` calls only (not the car's real velocity) so the linear tyre
-  model's effective stiffness (`(Cf+Cr)/(m·vx)`) doesn't approach the
-  fixed-timestep Euler-integration stability boundary as the car slows.
+- **`minSpeedForSlip = 3 m/s`.** Floors *only* the speed used inside the
+  slip-angle `atan2` calls, so the linear tyre model's effective stiffness
+  (`(Cf+Cr)/(m·vx)`) doesn't approach the fixed-timestep Euler-integration
+  stability boundary as the car slows. It must never gate whether braking,
+  rolling resistance, or the low-speed lateral-force fade apply — those three
+  always read the car's actual `vx`, never this floored value. (See "What
+  went wrong first" below — conflating this floor with "the car can't really
+  stop" was bug #4.)
+- **`ROLLING_RESISTANCE_FORCE = 400 N`.** A modest constant force, always
+  opposing the car's current direction of travel while `|vx| > AT_REST_SPEED`,
+  independent of the brake pedal. Without it, a coasting car (zero throttle,
+  zero brake) never decelerates: nothing in `vxDot` opposes motion unless the
+  driver brakes, so releasing every pedal left the car cruising forever at
+  whatever speed it last reached.
+- **`LOW_SPEED_FADE_SPEED = 1.0 m/s`.** Below this forward speed, lateral
+  tyre force is scaled toward zero (independent of `minSpeedForSlip`). At
+  `vx = 0`, `minSpeedForSlip`'s atan2 floor still leaves `alpha` equal to the
+  raw steer angle, which without this fade would let steering a stationary
+  car manufacture real cornering force out of nothing.
+- **`AT_REST_SPEED = 0.05 m/s`.** The threshold below which rolling
+  resistance stops applying (there is nothing left for it to oppose). The
+  car's actual snap-to-rest behaviour is a *sign* comparison in `physics.ts`,
+  not a speed threshold — see bug #4 below for why a threshold alone isn't
+  enough.
+- **`DRY_BASELINE_STEERING_FRACTION = 0.7`.** The documented "dry baseline"
+  cornering input referenced in `spec/brief.md` and used throughout the red
+  behavioural tests — not a UI default; the driver can still steer anywhere
+  in `[-1, 1]`. Chosen so the front axle's lateral demand at this fraction
+  stays under its friction-circle limit even though full lock alone can now
+  saturate an axle outright (since `maxSteerAngle` above was raised), making
+  it a safe "unsaturated" comparison baseline.
 - **`SURFACE_PRESETS` (dry `μ=1.0`, wet `μ=0.7`, ice `μ=0.3`).** A relative,
   illustrative ordering — not measured coefficients for any real compound,
   temperature, or water/ice depth.
 
+## Experiment lifecycle
+
+The car does not move on page load or after Reset: `createInitialState`
+returns phase `"ready"`, and `step` is a no-op while `phase !== "running"`.
+The visitor presses the explicit `data-testid="start-run"` control to begin a
+run (`startRun`), which sets the car to `ENTRY_SPEED` and flips the phase to
+`"running"`. This exists because an inert "ready" state and a moving
+"running" state look identical to a test that only checks utilisation
+percentages and state labels — see bug #5 below.
+
 ## What went wrong first, and what that changed
 
-Three bugs were found and fixed before this model was trustworthy, and all
-three are worth recording because they'd be easy to reintroduce by "fixing"
+Five bugs were found and fixed before this model was trustworthy, and all
+five are worth recording because they'd be easy to reintroduce by "fixing"
 a symptom instead of the cause:
 
 1. **The tyre lateral force had the wrong sign on both axles.** Slip angle
@@ -86,7 +137,36 @@ a symptom instead of the cause:
    to 0.045 rad while chasing this, and stayed there after the sign fix
    because it still produces a clean, legible demonstration — but the
    headroom argument in the constants file predates the real fix and is
-   more conservative than strictly necessary now.
+   more conservative than strictly necessary now. It was in fact still too
+   conservative in a different way: 0.045 rad turned out to be geometrically
+   incapable of matching this corner's own curvature at any steering
+   fraction, which is why `maxSteerAngle` was later recalibrated to 0.08 rad
+   (see "Tuned constants and why" above) — a distinct problem from the
+   friction-circle headroom this section was originally about.
+4. **The car could brake toward zero but never actually reach or hold it.**
+   `minSpeedForSlip` (a floor meant only for the `atan2` slip-angle
+   denominator) was also being used, elsewhere, to decide whether braking
+   force applied at all — below it, braking silently switched off, so the
+   car coasted at a small residual speed forever instead of stopping. There
+   was also no rolling resistance, so a car with no pedals held at all never
+   decelerated either. Fixed by (a) adding a constant `ROLLING_RESISTANCE_FORCE`
+   that always opposes motion above `AT_REST_SPEED`, independent of the brake
+   pedal, and (b) a kinematic rest-clamp in `step` that detects "no drive
+   force requested, and this timestep's integration either left `vx` at
+   exactly zero or pushed its sign past zero" and snaps `vx`/`vy`/`yawRate`
+   to exactly zero in that case. A plain speed threshold isn't enough here:
+   `fxTotal`'s sign is fixed by the pedal, not by the car's current direction
+   of travel, so a single large timestep can integrate straight through zero
+   and start accelerating backwards — comparing signs catches that
+   regardless of timestep size or how close to zero `vx` already is.
+5. **Page load and Reset launched the car immediately, with no input.**
+   `createInitialState` used to return a car already moving at speed, and
+   `step` would keep integrating it every frame from the moment the page
+   loaded — so "no input yet" and "driving normally" were indistinguishable
+   to any test that only checked utilisation percentages and state labels
+   (both read "stable" either way). Fixed by adding the `"ready"`/`"running"`
+   lifecycle phase above: `step` no-ops until the driver explicitly calls
+   `startRun`, so the car now visibly waits at rest until asked to move.
 
 ## Standing disclosures (never contradict these)
 

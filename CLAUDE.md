@@ -231,3 +231,44 @@ the agent from drifting off that idea or breaking the harness that tests it.
   case.** Green `pnpm check` proves the DOM contract and the physics unit
   tests; it does not prove the camera, saturation motion, or touch layout are
   legible --- only looking does.
+- **The car must never be in motion except as a direct result of the visitor
+  pressing Start.** On load and after Reset it sits in an explicit `"ready"`
+  phase; `step` must no-op in that phase. This was a real bug: the car used
+  to auto-launch on load/reset, and a test that only checks utilisation
+  percentages and state labels can't tell "inert" from "already driving"
+  apart --- they read identically. If you touch the lifecycle, add a test
+  that reads `data-testid="speed"` (or another true motion signal), not just
+  the state label.
+- **Braking, rolling resistance, and the low-speed lateral-force fade must
+  always read the car's actual `vx`/`vy`, never `minSpeedForSlip`** (that
+  constant floors only the `atan2` slip-angle denominator). Conflating the
+  two once meant the car could coast toward zero but never truly stop.
+  Snapping to rest must compare the *sign* of velocity before/after a
+  timestep's integration, not just compare against a speed threshold --- a
+  large timestep can integrate straight through zero and start reversing
+  before a threshold-only check would ever catch it.
+- **`maxSteerAngle` is not a standalone tuning knob** --- it must be
+  calibrated together with the corner's radius, the car's wheelbase, and
+  `ENTRY_SPEED` as one scenario. A steering angle picked in isolation (e.g.
+  to look "reasonable" or to avoid overloading the friction circle) can be
+  geometrically incapable of matching the corner's own curvature at *any*
+  steering fraction, so the car runs wide regardless of input --- a distinct
+  failure from a friction-circle overload, and invisible unless you check
+  the car can actually track the reference line, not just that it doesn't
+  spin.
+- **The chase camera must track the car's actual direction of travel
+  (velocity heading, or the road tangent), never rigid body heading.** Locking
+  the camera to `state.heading` hides slip angle by definition --- the one
+  thing this prototype exists to make legible --- since the view rotates
+  in lockstep with the car and never shows it pointing one way while moving
+  another.
+- **Pointer-driven controls must track *why* a control is held (a set of
+  source tags), consume a one-shot "pending pulse" flag so a tap shorter than
+  one simulation step still registers, and wrap `setPointerCapture`/
+  `releasePointerCapture` in try/catch.** Both calls throw for a pointerId the
+  browser has no active-pointer record for --- true of any synthetically
+  dispatched `PointerEvent` (Playwright's `dispatchEvent`, or an assistive
+  tool), not just real hardware input --- and an uncaught throw aborts the
+  handler before the press is ever registered, silently dropping it. This was
+  caught by `e2e/viewport.spec.ts`, not by any unit test, because jsdom never
+  exercises real pointer capture.

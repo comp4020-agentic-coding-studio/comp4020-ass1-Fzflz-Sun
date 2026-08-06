@@ -4,6 +4,7 @@ import {
   createInitialState,
   FIXED_TIMESTEP,
   rampControls,
+  startRun,
   step,
   TRACK_PARAMS,
 } from "./src/simulation/index.ts";
@@ -21,6 +22,7 @@ const steerLeftButton = required<HTMLElement>('[data-testid="steer-left"]');
 const steerRightButton = required<HTMLElement>('[data-testid="steer-right"]');
 const throttleButton = required<HTMLElement>('[data-testid="throttle"]');
 const brakeButton = required<HTMLElement>('[data-testid="brake"]');
+const startButton = required<HTMLElement>('[data-testid="start-run"]');
 const resetButton = required<HTMLElement>('[data-testid="reset"]');
 
 const drivetrainButtons: Array<[DrivetrainId, HTMLElement]> = [
@@ -98,13 +100,28 @@ for (const [id, el] of surfaceButtons) {
   });
 }
 
-resetButton.addEventListener("click", () => {
-  simState = createInitialState(currentDrivetrain, currentSurface);
+startButton.addEventListener("click", () => {
+  simState = startRun(simState);
   accumulator = 0;
   renderImmediately();
 });
 
+resetButton.addEventListener("click", () => {
+  simState = createInitialState(currentDrivetrain, currentSurface);
+  accumulator = 0;
+  heldControls.releaseAll();
+  renderImmediately();
+});
+
 window.addEventListener("resize", () => scene?.resize());
+
+// A held key/pointer whose release event never reaches us (focus leaves the
+// window mid-hold, the tab is backgrounded, a touch is interrupted by an OS
+// gesture) must not leave a control stuck on indefinitely.
+window.addEventListener("blur", () => heldControls.releaseAll());
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") heldControls.releaseAll();
+});
 
 const MAX_STEPS_PER_FRAME = 8; // caps the catch-up if a tab was backgrounded
 let accumulator = 0;
