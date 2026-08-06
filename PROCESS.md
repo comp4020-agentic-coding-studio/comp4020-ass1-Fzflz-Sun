@@ -2,15 +2,19 @@
 
 ## What I built
 
-*Grip is a Budget* is a one-corner interactive driving explainer. The visitor
-steers, accelerates and brakes while front- and rear-axle meters expose one
-idea: cornering, acceleration and braking all spend the same finite tyre-force
-budget, and drivetrain only changes which axle spends its longitudinal share.
-A chase-camera scene connects those numbers to the car's actual motion. It is
-a deliberately controlled teaching experiment, not a racing game or a claim of
-engineering-grade vehicle simulation — the car sits inert until the visitor
-presses Start, brakes to a genuine stop, and never moves except in direct
-response to a control.
+*Grip is a Budget* is a one-corner driving explainer built as a controlled
+experiment, not a driving game. The visitor chooses four discrete pre-run
+settings — drivetrain (FWD/RWD/AWD), surface (dry/wet/ice), throttle
+intensity (Light/Medium/Full), and throttle timing (Early/Mid/Late) — then
+presses Run and watches a fixed-duration, fully deterministic playback on a
+top-down 2D stage. Steering is always the same fixed autosteer program, never
+a visitor input, so the only variables are the ones the settings name.
+Front- and rear-axle meters expose the same idea throughout: cornering and
+acceleration draw on one finite tyre-force budget, and drivetrain and
+throttle timing only change which axle spends it first. The car sits inert
+until Run is pressed, settles into an explicit `Finished` state at the end of
+each run, and a fresh Run from `Finished` (no forced Reset) is how a visitor
+compares one setting change against the last result.
 
 ## The moments that mattered
 
@@ -66,3 +70,52 @@ resize-mid-run case, and I re-drove both viewports by hand before accepting
 the fix rather than trusting the green run alone.
 
 [`5d482e5`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-Fzflz-Sun/commit/5d482e583c839814ba10e9e4e5f4207ea6ca8dfa)
+
+### 4. The green, working build was still the wrong interaction
+
+Fixing (2) and (3) made the drive feel correct, but re-reading the brief's
+own rubric — one strong idea, an interaction simple enough to reason about —
+against what I'd actually built exposed a different problem, not a bug:
+holding steering and throttle in real time let the visitor's own driving
+skill become a second variable entangled with the one thing the prototype
+teaches. It could never produce the kind of clean, attributable conclusion
+this course's own Elevators and trolley-problem examples get from a single
+discrete choice. I converted the interaction to a controlled experiment: the
+visitor sets drivetrain, surface, throttle intensity, and throttle timing,
+then presses Run once, and a closed-form `controlsAtElapsed(elapsed, ...)`
+plays back the identical script every time for those settings — steering was
+already a fixed autosteer target from the prior fix, so this mainly meant
+retiring the last real-time input (held throttle) and its whole
+`HeldControls`/pointer-capture machinery in `src/ui/controls.ts`, which had
+no reason to exist once nothing is held anymore. I also swapped the 3D
+chase-camera scene for a translate-only, north-up 2D top-down view: besides
+being a more tractable rendering surface than modelling a convincing 3D car,
+a fixed-orientation camera makes slip legible by construction, whereas the
+old chase camera needed an explicit rule (track velocity heading, not body
+heading) to avoid hiding it. Wheels still switch to the coral saturation
+accent the moment an axle's `utilisation` exceeds 1, so that signal survived
+the change unchanged.
+
+As with (3), I rewrote `src/simulation/behaviour.test.ts` and
+`e2e/viewport.spec.ts` against the new contract before implementing —
+replacing hand-built `HeldControls`-shaped inputs with settings-driven
+`controlsAtElapsed` calls, and replacing keyboard-hold/pointer-hold assertions
+with select-a-setting-then-press-Run assertions — and confirmed they failed
+against the old real-time-driving code for the expected reason before
+changing `main.ts`, `src/rendering/`, and `src/simulation/inputs.ts`. The
+generalising rules — driving input is discrete and deterministic, never
+real-time again without deliberately revisiting that confound; the 2D camera
+must stay translate-only and north-up; throttle-timing thresholds are
+calibrated together with `RUN_DURATION_SECONDS`, `ENTRY_SPEED`, and
+`throttleRampPerSecond` as one scenario, the same discipline as
+`maxSteerAngle` — are now in `CLAUDE.md`, alongside the pointer-capture lesson
+from (3) kept as a note for any future held/pointer control, even though the
+code it was fixing no longer exists. `pnpm check` is now 79/79 and
+`pnpm test:e2e` is 25/25 across both viewports, including the resize-mid-run
+case; removing Three.js also dropped the production JS bundle from a
+>500 kB warning to 11.66 kB, and I re-drove both viewports by hand — set
+identical settings but Early vs. Late throttle timing — to confirm the
+saturation-timing contrast the redesign exists to make legible was actually
+visible, not just asserted by a test.
+
+[`201cd58`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-Fzflz-Sun/commit/201cd5872372625f4d8cb8e0206b2d3c4481b95a)
