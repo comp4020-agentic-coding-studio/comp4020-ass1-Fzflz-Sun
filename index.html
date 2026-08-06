@@ -124,6 +124,70 @@
                 </button>
               </div>
             </fieldset>
+            <fieldset>
+              <legend>Throttle intensity</legend>
+              <div class="option-group" role="group" aria-label="Throttle intensity">
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="throttle-intensity-light"
+                  data-throttle-intensity="light"
+                  aria-pressed="false"
+                >
+                  Light
+                </button>
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="throttle-intensity-medium"
+                  data-throttle-intensity="medium"
+                  aria-pressed="true"
+                >
+                  Medium
+                </button>
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="throttle-intensity-full"
+                  data-throttle-intensity="full"
+                  aria-pressed="false"
+                >
+                  Full
+                </button>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>Throttle timing</legend>
+              <div class="option-group" role="group" aria-label="Throttle timing">
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="throttle-timing-early"
+                  data-throttle-timing="early"
+                  aria-pressed="true"
+                >
+                  Early
+                </button>
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="throttle-timing-mid"
+                  data-throttle-timing="mid"
+                  aria-pressed="false"
+                >
+                  Mid
+                </button>
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="throttle-timing-late"
+                  data-throttle-timing="late"
+                  aria-pressed="false"
+                >
+                  Late
+                </button>
+              </div>
+            </fieldset>
           </section>
 
           <details class="panel" data-testid="model-assumptions">
@@ -136,7 +200,12 @@
               longitudinal share — FWD does not always understeer, RWD does not always
               oversteer, and AWD can still slide if pushed hard enough. Dry/wet/ice are a
               relative, illustrative grip ordering, not measured coefficients for any real
-              tyre or surface. Full assumptions and tuned constants are documented in this
+              tyre or surface. There is no real-time driving input by design: steering is a
+              fixed autosteer program (the same every run, so it isn't a second variable
+              alongside drivetrain/surface), and throttle intensity/timing are the two
+              settings you choose before pressing Run. Pick a combination, run it, then
+              change one setting and run again to compare — that comparison is the whole
+              interaction. Full assumptions and tuned constants are documented in this
               project's <code>docs/model-assumptions.md</code>.
             </p>
           </details>
@@ -144,41 +213,13 @@
       </div>
 
       <div class="control-bar">
-        <button
-          type="button"
-          class="drive-button"
-          data-testid="steer-left"
-          aria-label="Steer left"
-        >
-          ◀
-        </button>
-        <button
-          type="button"
-          class="drive-button"
-          data-testid="steer-right"
-          aria-label="Steer right"
-        >
-          ▶
-        </button>
-        <button
-          type="button"
-          class="drive-button"
-          data-testid="throttle"
-          aria-label="Throttle"
-        >
-          ▲
-        </button>
-        <button type="button" class="drive-button" id="brake" data-testid="brake" aria-label="Brake">
-          ▼
-        </button>
-        <button type="button" id="start-run" data-testid="start-run" aria-label="Start — enter the corner">
-          Start
+        <button type="button" id="start-run" data-testid="start-run" aria-label="Run — enter the corner">
+          Run
         </button>
         <button type="button" id="reset" data-testid="reset">Reset</button>
         <div class="control-readouts">
-          <span>Steer: <span data-testid="steering-value">0%</span></span>
-          <span>Throttle: <span data-testid="throttle-value">0%</span></span>
-          <span>Brake: <span data-testid="brake-value">0%</span></span>
+          <span>Autosteer angle: <span data-testid="steering-value">0%</span></span>
+          <span>Throttle now: <span data-testid="throttle-value">0%</span></span>
         </div>
       </div>
     </div>

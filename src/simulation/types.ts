@@ -6,21 +6,24 @@ export type SurfaceId = "dry" | "wet" | "ice";
 export type DrivingState = "stable" | "understeer" | "oversteer" | "slide";
 /** Experiment lifecycle, separate from `DrivingState`'s handling
  * classification: "ready" is the inert state on load/Reset (stationary,
- * indefinitely, until the driver explicitly starts a run); "running" is a
- * started run over which handling can be observed. */
-export type RunPhase = "ready" | "running";
+ * indefinitely, until the visitor explicitly starts a run); "running" is a
+ * started run over which handling can be observed; "finished" is reached
+ * once the run's fixed duration (`RUN_DURATION_SECONDS`) elapses, and holds
+ * the settled final state until Run is pressed again. */
+export type RunPhase = "ready" | "running" | "finished";
 
-/** Which digital controls are currently held down. Produced by the UI layer
- * from keyboard/touch/pointer events; consumed by `rampControls`. */
-export interface HeldControls {
-  steerLeft: boolean;
-  steerRight: boolean;
-  throttle: boolean;
-  brake: boolean;
-}
+/** Discrete throttle-intensity setting, chosen before a run and held fixed
+ * for its whole duration — see `THROTTLE_INTENSITY_PRESETS` (constants.ts). */
+export type ThrottleIntensityId = "light" | "medium" | "full";
 
-/** The analog driving inputs after ramping: steering in [-1, 1] (positive =
- * left), throttle and brake in [0, 1]. */
+/** Discrete throttle-timing setting: when during the run throttle begins to
+ * ramp in — see `THROTTLE_TIMING_PRESETS` (constants.ts). */
+export type ThrottleTimingId = "early" | "mid" | "late";
+
+/** The analog driving inputs for one simulation step: steering in [-1, 1]
+ * (positive = left), throttle and brake in [0, 1]. Produced by
+ * `controlsAtElapsed` as a pure function of elapsed run time and the
+ * visitor's discrete settings — there is no held/real-time input. */
 export interface ControlInputs {
   steering: number;
   throttle: number;
@@ -52,7 +55,9 @@ export interface SimState {
   vy: number;
   /** Yaw rate, radians/sec, CCW-positive. */
   yawRate: number;
-  /** Current ramped control values, persisted across steps for continuity. */
+  /** The control values applied on the most recent step — telemetry of the
+   * current run's deterministic playback, not a setting a visitor changes
+   * directly. */
   steering: number;
   throttle: number;
   brake: number;
@@ -67,6 +72,10 @@ export interface SimState {
   drivingState: DrivingState;
   drivetrain: DrivetrainId;
   surface: SurfaceId;
+  /** Discrete pre-run settings — chosen before pressing Run, fixed for the
+   * whole run, unaffected by `step()`. */
+  throttleIntensity: ThrottleIntensityId;
+  throttleTiming: ThrottleTimingId;
   /** Simulated seconds since the last reset — never wall-clock time. */
   elapsed: number;
   /** See `RunPhase`. While "ready", `step` is a no-op: the car sits at rest
@@ -80,6 +89,21 @@ export interface SurfacePreset {
   /** Illustrative relative grip coefficient. Not a claim about any real
    * tyre/surface/temperature combination — see docs/model-assumptions.md. */
   mu: number;
+}
+
+export interface ThrottleIntensityPreset {
+  id: ThrottleIntensityId;
+  label: string;
+  /** Fraction of `maxEngineForce` this intensity ramps toward. */
+  fraction: number;
+}
+
+export interface ThrottleTimingPreset {
+  id: ThrottleTimingId;
+  label: string;
+  /** Elapsed run time (seconds) at which throttle begins ramping toward the
+   * selected intensity. Before this, throttle is exactly 0. */
+  thresholdSeconds: number;
 }
 
 export interface CarParams {

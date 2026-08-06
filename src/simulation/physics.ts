@@ -16,6 +16,8 @@ import type {
   DrivingState,
   SimState,
   SurfaceId,
+  ThrottleIntensityId,
+  ThrottleTimingId,
   TrackParams,
 } from "./types.ts";
 
@@ -68,6 +70,8 @@ function classify(front: AxleState, rear: AxleState): DrivingState {
 export function createInitialState(
   drivetrain: DrivetrainId = "RWD",
   surface: SurfaceId = "dry",
+  throttleIntensity: ThrottleIntensityId = "medium",
+  throttleTiming: ThrottleTimingId = "early",
 ): SimState {
   const zeroAxle: AxleState = {
     fxDemand: 0,
@@ -96,19 +100,24 @@ export function createInitialState(
     drivingState: "stable",
     drivetrain,
     surface,
+    throttleIntensity,
+    throttleTiming,
     elapsed: 0,
     phase: "ready",
   };
 }
 
 /** The explicit "Enter the corner" action: begins a run from the given
- * ready state at the documented entry speed and pose, discarding whatever
- * partial progress a previous run made. Same drivetrain/surface selection,
- * same starting position — the only thing that changes run to run is the
- * driver's input, which is what makes repeat runs a fair comparison. */
+ * ready (or finished) state at the documented entry speed and pose,
+ * discarding whatever progress a previous run made. Same drivetrain/surface/
+ * throttle-intensity/throttle-timing selection, same starting position — the
+ * only thing that changes run to run is which of those discrete settings the
+ * visitor picked, which is what makes repeat runs a fair comparison. Safe to
+ * call directly from "finished" as well as "ready": there is no forced Reset
+ * step in between. */
 export function startRun(state: SimState): SimState {
   return {
-    ...createInitialState(state.drivetrain, state.surface),
+    ...createInitialState(state.drivetrain, state.surface, state.throttleIntensity, state.throttleTiming),
     phase: "running",
     vx: ENTRY_SPEED,
   };

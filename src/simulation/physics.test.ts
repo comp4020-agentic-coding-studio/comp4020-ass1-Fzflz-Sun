@@ -6,7 +6,7 @@ import {
   SURFACE_PRESETS,
   TRACK_PARAMS,
 } from "./constants.ts";
-import { NEUTRAL_CONTROLS, NO_CONTROLS_HELD, rampControls } from "./inputs.ts";
+import { controlsAtElapsed } from "./inputs.ts";
 import { createInitialState, startRun, step } from "./physics.ts";
 import type { ControlInputs, DrivetrainId, SimState, SurfaceId } from "./types.ts";
 
@@ -172,39 +172,47 @@ describe("determinism", () => {
     expect(run()).toEqual(run());
   });
 
-  it("rampControls is a pure function of its inputs (no hidden time source)", () => {
-    const heldSequence = [NO_CONTROLS_HELD, { ...NO_CONTROLS_HELD, throttle: true }, NO_CONTROLS_HELD];
-
-    function runRamp(): ControlInputs {
-      let c = NEUTRAL_CONTROLS;
-      for (const held of heldSequence) c = rampControls(c, held, FIXED_TIMESTEP, CAR_PARAMS);
-      return c;
+  it("controlsAtElapsed is a pure function of its inputs (no hidden time source)", () => {
+    function runAt(elapsed: number): ControlInputs {
+      return controlsAtElapsed(elapsed, "full", "mid", CAR_PARAMS);
     }
 
-    expect(runRamp()).toEqual(runRamp());
+    expect(runAt(3)).toEqual(runAt(3));
   });
 });
 
-describe("input ramping", () => {
-  it("ramps throttle up smoothly instead of jumping to full on the first held frame", () => {
-    const held = { ...NO_CONTROLS_HELD, throttle: true };
-    const afterOneFrame = rampControls(NEUTRAL_CONTROLS, held, FIXED_TIMESTEP, CAR_PARAMS);
-    expect(afterOneFrame.throttle).toBeGreaterThan(0);
-    expect(afterOneFrame.throttle).toBeLessThan(1);
+describe("controlsAtElapsed", () => {
+  it("ramps throttle up smoothly instead of jumping to full on the first elapsed step, once past its timing threshold", () => {
+    const afterOneStep = controlsAtElapsed(FIXED_TIMESTEP, "full", "early", CAR_PARAMS);
+    expect(afterOneStep.throttle).toBeGreaterThan(0);
+    expect(afterOneStep.throttle).toBeLessThan(1);
   });
 
-  it("reaches full throttle after enough held time, then stays clamped at 1", () => {
-    let c = NEUTRAL_CONTROLS;
-    const held = { ...NO_CONTROLS_HELD, throttle: true };
-    for (let i = 0; i < 1000; i++) c = rampControls(c, held, FIXED_TIMESTEP, CAR_PARAMS);
-    expect(c.throttle).toBe(1);
+  it("reaches the selected intensity fraction after enough elapsed time, then stays clamped there", () => {
+    const wellPastRampTime = controlsAtElapsed(100, "full", "early", CAR_PARAMS);
+    expect(wellPastRampTime.throttle).toBe(1);
   });
 
-  it("releasing steering ramps it back toward neutral rather than snapping", () => {
-    let c = { ...NEUTRAL_CONTROLS, steering: 1 };
-    c = rampControls(c, NO_CONTROLS_HELD, FIXED_TIMESTEP, CAR_PARAMS);
-    expect(c.steering).toBeLessThan(1);
-    expect(c.steering).toBeGreaterThan(0);
+  it("holds throttle at exactly 0 before the timing threshold is reached", () => {
+    const before = controlsAtElapsed(2, "full", "late", CAR_PARAMS);
+    expect(before.throttle).toBe(0);
+  });
+
+  it("ramps steering in smoothly from 0 at the start of a run rather than snapping to the baseline", () => {
+    const atStart = controlsAtElapsed(0, "medium", "early", CAR_PARAMS);
+    expect(atStart.steering).toBe(0);
+
+    const afterOneStep = controlsAtElapsed(FIXED_TIMESTEP, "medium", "early", CAR_PARAMS);
+    expect(Math.abs(afterOneStep.steering)).toBeGreaterThan(0);
+    expect(Math.abs(afterOneStep.steering)).toBeLessThan(DRY_BASELINE_STEERING_FRACTION);
+
+    const wellPastRampTime = controlsAtElapsed(100, "medium", "early", CAR_PARAMS);
+    expect(wellPastRampTime.steering).toBeCloseTo(-DRY_BASELINE_STEERING_FRACTION, 6);
+  });
+
+  it("brake is always 0 — braking is out of scope for the discrete-run redesign", () => {
+    expect(controlsAtElapsed(0, "full", "early", CAR_PARAMS).brake).toBe(0);
+    expect(controlsAtElapsed(100, "full", "early", CAR_PARAMS).brake).toBe(0);
   });
 });
 

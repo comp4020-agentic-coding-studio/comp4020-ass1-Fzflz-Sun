@@ -1,4 +1,12 @@
-import type { CarParams, SurfacePreset, TrackParams } from "./types.ts";
+import type {
+  CarParams,
+  SurfacePreset,
+  ThrottleIntensityId,
+  ThrottleIntensityPreset,
+  ThrottleTimingId,
+  ThrottleTimingPreset,
+  TrackParams,
+} from "./types.ts";
 
 // Every number here is a documented teaching-model assumption, not a claim
 // about a real vehicle. See docs/model-assumptions.md — keep the two in
@@ -95,9 +103,46 @@ export const LOW_SPEED_FADE_SPEED = 1.0;
 export const AT_REST_SPEED = 0.05;
 
 // Fraction of maxSteerAngle that is this teaching model's "documented dry
-// baseline" corning input — the one input used by the red behavioural tests
-// (src/simulation/behaviour.test.ts) and referenced in spec/brief.md as the
-// steering effort that should track the reference line on a dry surface at
-// ENTRY_SPEED, with full lock available to tighten the line further beyond
-// it. Not a UI default — the driver can still steer anywhere in [-1, 1].
+// baseline" corning input, and — since the redesign that replaced held
+// steering with a fixed autosteer program — the *only* steering input the
+// simulation ever produces (controlsAtElapsed, inputs.ts). It is calibrated
+// together with TRACK_PARAMS.radius, wheelbaseHalf and ENTRY_SPEED (see
+// maxSteerAngle's comment above) to track the reference line on a dry
+// surface: the same target every run, ramped in from 0 over
+// steerRampPerSecond, never held or adjusted by the visitor.
 export const DRY_BASELINE_STEERING_FRACTION = 0.7;
+
+// Seconds — the fixed duration of every run, from startRun to the "finished"
+// phase. Calibrated as one scenario together with ENTRY_SPEED, the throttle
+// timing thresholds below, and throttleRampPerSecond: long enough that a
+// "late" throttle onset still has clear runway (thresholdSeconds + ~0.83s
+// full-throttle ramp time) to show a saturation contrast against "early"
+// before the run ends, short enough to stay a legible, watchable playback.
+export const RUN_DURATION_SECONDS = 6;
+
+// Discrete throttle-intensity choices, each a fixed fraction of
+// maxEngineForce the run ramps toward once its timing threshold is reached.
+// Same discipline as SURFACE_PRESETS: a documented teaching ordering
+// (light/medium/full), not a claim about a real accelerator pedal.
+export const THROTTLE_INTENSITY_PRESETS: Record<ThrottleIntensityId, ThrottleIntensityPreset> = {
+  light: { id: "light", label: "Light", fraction: 0.4 },
+  medium: { id: "medium", label: "Medium", fraction: 0.7 },
+  full: { id: "full", label: "Full", fraction: 1.0 },
+};
+
+// Discrete throttle-timing choices: the elapsed run time at which throttle
+// starts ramping in. This is the demonstrative piece of the redesign —
+// lateral demand from cornering is highest right after corner entry (the car
+// is still at ENTRY_SPEED) and eases as ROLLING_RESISTANCE_FORCE bleeds
+// speed off a coasting car, so the same throttle intensity applied "early"
+// stacks on peak lateral demand and saturates sooner than the identical
+// intensity applied "late", once the car has coasted down and gained more
+// lateral headroom. Calibrated together with RUN_DURATION_SECONDS and
+// throttleRampPerSecond above: "late" still leaves ~1.5s of runway — more
+// than the ~0.83s full-throttle ramp — for the contrast to be visible before
+// the run ends.
+export const THROTTLE_TIMING_PRESETS: Record<ThrottleTimingId, ThrottleTimingPreset> = {
+  early: { id: "early", label: "Early", thresholdSeconds: 0 },
+  mid: { id: "mid", label: "Mid", thresholdSeconds: 2.5 },
+  late: { id: "late", label: "Late", thresholdSeconds: 4.5 },
+};

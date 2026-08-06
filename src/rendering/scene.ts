@@ -1,20 +1,23 @@
-import * as THREE from "three";
+import { CAR_PARAMS } from "../simulation/constants.ts";
 import type { SimState, TrackParams } from "../simulation/index.ts";
 import { trackCentre } from "../simulation/track.ts";
-import { createCarMesh, FRONT_COLOR, REAR_COLOR, updateAxleMarker } from "./car.ts";
+import { drawCar, FRONT_COLOR, REAR_COLOR, wheelColor } from "./car.ts";
 
-// Maps the simulation's 2D (x forward, y left) plane onto Three.js's XZ
-// ground plane. Derivation (see docs/model-assumptions.md-adjacent commit
-// notes): with the car body's local -Z axis built as "front" (car.ts),
-// rotation.y = heading - PI/2 makes the mesh's forward direction match the
-// simulation's (cos(heading), -sin(heading)) world-frame forward vector.
-function simToWorld(x: number, y: number): { x: number; z: number } {
-  return { x, z: -y };
-}
+// Metres-to-pixels scale for the 2D bird's-eye view. A translate-only,
+// north-up camera (no rotation) follows the car's position every frame —
+// unlike the old 3D chase camera, this makes slip (body heading vs. actual
+// travel direction) directly visible without needing to track travel-heading
+// separately (CLAUDE.md's camera rule, now automatically satisfied: nothing
+// here reads state.heading for the *camera*, only for the car sprite).
+const METERS_TO_PIXELS = 10;
+const ROAD_HALF_WIDTH = 7; // m, matches the old 3D scene's road width
+const MAX_DEVICE_PIXEL_RATIO = 2;
+const TRAIL_MAX_POINTS = 40;
 
-function headingToWorldRotationY(heading: number): number {
-  return heading - Math.PI / 2;
-}
+const BACKGROUND_COLOR = "#1a1d22"; // matches --color-bg
+const ROAD_COLOR = "#2c3038";
+const KERB_COLOR = "#3a3f49";
+const REFERENCE_LINE_COLOR = "#dfdccf";
 
 export interface GripScene {
   update(state: SimState, reducedMotion: boolean): void;
@@ -22,130 +25,154 @@ export interface GripScene {
   dispose(): void;
 }
 
-/** Builds the chase-camera 3D scene: ground, the one corner's road + kerbs,
- * a reference line, and the car. Pure primitive geometry only. Returns null
- * semantics are the caller's job — this throws if WebGL is unavailable, and
- * main.ts catches that so a canvas-less browser still gets the full
- * instrument-panel explanation (CLAUDE.md: DOM state is the non-visual
- * truth, WebGL is not required for the interaction to be legible). */
+interface TrailPoint {
+  x: number;
+  y: number;
+  color: string;
+}
+
+/** Builds the 2D bird's-eye scene: the one corner's road + kerbs, a
+ * reference line, a short saturated-wheel trail, and the car. Replaces the
+ * old Three.js chase-camera renderer — same exported shape (`update`/
+ * `resize`/`dispose`) so main.ts's call sites are unaffected. Throws if a 2D
+ * context is unavailable; main.ts catches that so a canvas-less browser
+ * still gets the full instrument-panel explanation (CLAUDE.md: DOM state is
+ * the non-visual truth, the canvas is not required for the interaction to be
+ * legible). */
 export function createGripScene(canvas: HTMLCanvasElement, track: TrackParams): GripScene {
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x1a1d22);
-  scene.fog = new THREE.Fog(0x1a1d22, 40, 160);
-
-  const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 500);
-
-  scene.add(new THREE.HemisphereLight(0xbfd4de, 0x14151a, 0.9));
-  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
-  sun.position.set(30, 40, 10);
-  scene.add(sun);
-
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(500, 500),
-    new THREE.MeshStandardMaterial({ color: 0x22262d, roughness: 1 }),
-  );
-  ground.rotation.x = -Math.PI / 2;
-  scene.add(ground);
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("2D canvas context unavailable");
+  // Re-bound with an explicit non-null type: TS's null-narrowing above only
+  // covers direct references in this scope, not the nested closures below.
+  const ctx: CanvasRenderingContext2D = context;
 
   const centre = trackCentre(track);
-  const centreWorld = simToWorld(centre.cx, centre.cy);
-  const roadHalfWidth = 7;
+  let trail: TrailPoint[] = [];
+  let lastElapsed = 0;
 
-  const road = new THREE.Mesh(
-    new THREE.RingGeometry(track.radius - roadHalfWidth, track.radius + roadHalfWidth, 96),
-    new THREE.MeshStandardMaterial({ color: 0x2c3038, roughness: 0.95 }),
-  );
-  road.rotation.x = -Math.PI / 2;
-  road.position.set(centreWorld.x, 0.01, centreWorld.z);
-  scene.add(road);
+  function resize(): void {
+    const dpr = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO);
+    const width = Math.max(1, canvas.clientWidth);
+    const height = Math.max(1, canvas.clientHeight);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
 
-  const kerbMaterial = new THREE.MeshStandardMaterial({ color: 0x3a3f49, roughness: 0.9 });
-  const outerKerb = new THREE.Mesh(
-    new THREE.RingGeometry(track.radius + roadHalfWidth, track.radius + roadHalfWidth + 0.6, 96),
-    kerbMaterial,
-  );
-  outerKerb.rotation.x = -Math.PI / 2;
-  outerKerb.position.set(centreWorld.x, 0.015, centreWorld.z);
-  scene.add(outerKerb);
+  function drawRoad(): void {
+    ctx.fillStyle = ROAD_COLOR;
+    ctx.beginPath();
+    ctx.arc(centre.cx, centre.cy, track.radius + ROAD_HALF_WIDTH, 0, Math.PI * 2);
+    ctx.arc(centre.cx, centre.cy, track.radius - ROAD_HALF_WIDTH, 0, Math.PI * 2, true);
+    ctx.fill("evenodd");
 
-  const innerKerb = new THREE.Mesh(
-    new THREE.RingGeometry(track.radius - roadHalfWidth - 0.6, track.radius - roadHalfWidth, 96),
-    kerbMaterial,
-  );
-  innerKerb.rotation.x = -Math.PI / 2;
-  innerKerb.position.set(centreWorld.x, 0.015, centreWorld.z);
-  scene.add(innerKerb);
+    ctx.strokeStyle = KERB_COLOR;
+    ctx.lineWidth = 0.3;
+    ctx.beginPath();
+    ctx.arc(centre.cx, centre.cy, track.radius + ROAD_HALF_WIDTH, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(centre.cx, centre.cy, track.radius - ROAD_HALF_WIDTH, 0, Math.PI * 2);
+    ctx.stroke();
 
-  const referenceLine = new THREE.Mesh(
-    new THREE.TorusGeometry(track.radius, 0.08, 8, 128),
-    new THREE.MeshStandardMaterial({ color: 0xdfdccf, roughness: 0.5 }),
-  );
-  referenceLine.rotation.x = Math.PI / 2;
-  referenceLine.position.set(centreWorld.x, 0.03, centreWorld.z);
-  scene.add(referenceLine);
+    ctx.strokeStyle = REFERENCE_LINE_COLOR;
+    ctx.lineWidth = 0.15;
+    ctx.setLineDash([1.2, 1.2]);
+    ctx.beginPath();
+    ctx.arc(centre.cx, centre.cy, track.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
-  const car = createCarMesh();
-  scene.add(car.group);
-
-  const cameraTarget = new THREE.Vector3();
-  const cameraPosTarget = new THREE.Vector3();
-  let cameraInitialised = false;
-
-  function layout(state: SimState, alpha: number): void {
-    const worldPos = simToWorld(state.x, state.y);
-    car.group.position.set(worldPos.x, 0, worldPos.z);
-    car.group.rotation.y = headingToWorldRotationY(state.heading);
-
-    updateAxleMarker(car.frontMarker, FRONT_COLOR, state.front.utilisation, state.front.saturated);
-    updateAxleMarker(car.rearMarker, REAR_COLOR, state.rear.utilisation, state.rear.saturated);
-
-    // Chase the car's actual direction of travel, not its body heading: a
-    // slide means those two diverge (the body-frame slip angle,
-    // atan2(vy, vx)), and a camera rigidly locked to heading alone keeps the
-    // car dead-centre and pointing "forward" on screen regardless, hiding
-    // exactly the loss-of-control moment this instrument exists to show. At
-    // vx = vy = 0 atan2 is 0, so a stationary or straight-tracking car is
-    // unaffected.
-    const travelHeading = state.heading + Math.atan2(state.vy, state.vx);
-    const forward = new THREE.Vector3(Math.cos(travelHeading), 0, -Math.sin(travelHeading));
-    cameraPosTarget
-      .copy(forward)
-      .multiplyScalar(-9)
-      .add(new THREE.Vector3(worldPos.x, 4.2, worldPos.z));
-    cameraTarget.set(worldPos.x, 0.8, worldPos.z).addScaledVector(forward, 6);
-
-    if (!cameraInitialised) {
-      camera.position.copy(cameraPosTarget);
-      cameraInitialised = true;
-    } else {
-      camera.position.lerp(cameraPosTarget, alpha);
+  function drawTrail(reducedMotion: boolean): void {
+    for (let i = 0; i < trail.length; i++) {
+      const point = trail[i];
+      const age = trail.length - i;
+      const opacity = reducedMotion ? 0.5 : Math.max(0, 1 - age / TRAIL_MAX_POINTS);
+      ctx.globalAlpha = opacity;
+      ctx.fillStyle = point.color;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 0.12, 0, Math.PI * 2);
+      ctx.fill();
     }
-    camera.lookAt(cameraTarget);
+    ctx.globalAlpha = 1;
+  }
+
+  /** Cheap, non-photorealistic evidence of *where* an axle spent its
+   * saturated moments: a capped trail of dots dropped at that axle's world
+   * position whenever `state.front.saturated`/`state.rear.saturated` is
+   * true. Cleared whenever `state.elapsed` goes backwards — the only signal
+   * that distinguishes "still running" from "a fresh run just started"
+   * (Reset returns elapsed to 0 with phase "ready"; pressing Run from
+   * "finished" also resets elapsed to 0, with no separate flag needed). */
+  function recordTrail(state: SimState): void {
+    if (state.elapsed < lastElapsed) trail = [];
+    lastElapsed = state.elapsed;
+
+    if (state.phase !== "running") return;
+
+    const forwardX = Math.cos(state.heading);
+    const forwardY = Math.sin(state.heading);
+    if (state.front.saturated) {
+      trail.push({
+        x: state.x + forwardX * CAR_PARAMS.wheelbaseHalf,
+        y: state.y + forwardY * CAR_PARAMS.wheelbaseHalf,
+        color: wheelColor(FRONT_COLOR, state.front.utilisation, true),
+      });
+    }
+    if (state.rear.saturated) {
+      trail.push({
+        x: state.x - forwardX * CAR_PARAMS.wheelbaseHalf,
+        y: state.y - forwardY * CAR_PARAMS.wheelbaseHalf,
+        color: wheelColor(REAR_COLOR, state.rear.utilisation, true),
+      });
+    }
+    if (trail.length > TRAIL_MAX_POINTS) trail = trail.slice(trail.length - TRAIL_MAX_POINTS);
   }
 
   function update(state: SimState, reducedMotion: boolean): void {
-    // Reduced-motion visitors get the same camera framing without the
-    // trailing lag/easing (CLAUDE.md, spec/brief.md edge cases).
-    layout(state, reducedMotion ? 1 : 0.12);
-    renderer.render(scene, camera);
+    recordTrail(state);
+
+    const dpr = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = BACKGROUND_COLOR;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const cssWidth = canvas.width / dpr;
+    const cssHeight = canvas.height / dpr;
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.save();
+    ctx.translate(cssWidth / 2, cssHeight / 2);
+    // +y-up, matching physics.ts's own world-frame convention (heading
+    // CCW-positive from +x) — after this, ctx.rotate(heading) below behaves
+    // exactly like the sim's heading with no extra sign flips.
+    ctx.scale(METERS_TO_PIXELS, -METERS_TO_PIXELS);
+    ctx.translate(-state.x, -state.y);
+
+    drawRoad();
+    drawTrail(reducedMotion);
+
+    ctx.save();
+    ctx.translate(state.x, state.y);
+    ctx.rotate(state.heading);
+    const frontSteerAngle = state.steering * CAR_PARAMS.maxSteerAngle;
+    drawCar(
+      ctx,
+      CAR_PARAMS.wheelbaseHalf,
+      frontSteerAngle,
+      wheelColor(FRONT_COLOR, state.front.utilisation, state.front.saturated),
+      wheelColor(REAR_COLOR, state.rear.utilisation, state.rear.saturated),
+    );
+    ctx.restore();
+
+    ctx.restore();
   }
 
-  function resize(): void {
-    const width = Math.max(1, canvas.clientWidth);
-    const height = Math.max(1, canvas.clientHeight);
-    renderer.setSize(width, height, false);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
+  function dispose(): void {
+    // No WebGL context / GPU resources to release for a 2D canvas.
   }
 
   resize();
-
-  function dispose(): void {
-    renderer.dispose();
-  }
 
   return { update, resize, dispose };
 }

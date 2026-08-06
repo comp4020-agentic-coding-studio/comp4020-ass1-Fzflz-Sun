@@ -23,36 +23,56 @@ untouched, either the job was tiny or nobody read it.
   acceleration, and braking all draw on that same budget — not on separate
   supplies of force — so the axle that runs out first, not the drivetrain
   label, decides how the car leaves the intended line.
-- **The mechanic**: one car, driven by the visitor through one broad, fixed
-  corner. Steering sets desired curvature, throttle and brake set longitudinal
-  demand; both are combined per axle through a friction-circle limit
-  (`utilisation = sqrt((Fx/FxLimit)^2 + (Fy/FyLimit)^2)`) and the drivetrain
-  choice (FWD/RWD/AWD) only changes *which axle* carries the longitudinal
-  share. When utilisation on an axle exceeds 1, that axle's achievable force
-  clamps, and the car visibly runs wide (front saturates) or rotates (rear
-  saturates).
+- **The mechanic**: one car, one broad, fixed corner, driven by a single
+  deterministic autosteer + throttle script the visitor configures *before*
+  it runs, not by real-time driving input. Steering is always the same fixed
+  autosteer program (so it is never a second variable to control for); the
+  visitor's only inputs are four discrete pre-run settings — drivetrain
+  (FWD/RWD/AWD), surface (dry/wet/ice), throttle intensity (Light/Medium/
+  Full), and throttle timing (Early/Mid/Late, i.e. how soon into the run
+  throttle starts ramping in) — plus one `data-testid="start-run"` button.
+  Steering and throttle demand are combined per axle through a
+  friction-circle limit
+  (`utilisation = sqrt((Fx/FxLimit)^2 + (Fy/FyLimit)^2)`), and the drivetrain
+  choice only changes *which axle* carries the longitudinal share. When
+  utilisation on an axle exceeds 1, that axle's achievable force clamps, and
+  the car visibly runs wide (front saturates) or rotates (rear saturates).
+  Throttle timing is the piece that makes the shared-budget idea legible
+  without any real-time skill: lateral demand from cornering is highest right
+  after corner entry and eases as the car coasts, so applying the same
+  throttle intensity *early* stacks on that peak lateral demand and saturates
+  an axle sooner than applying it *late* — a controlled comparison a visitor
+  makes by changing one setting and pressing Run again, exactly like the
+  course's Elevators/trolley-problem examples.
 - **The core interaction, stated testably**: the car sits at rest
   indefinitely on load or after `data-testid="reset"` — nothing moves until
-  the visitor presses `data-testid="start-run"` to enter the corner at a
-  documented entry speed. Holding the throttle control (button, pointer,
-  `ArrowUp`/`W`) while the steering control is deflected
-  (`ArrowLeft`/`ArrowRight`/`A`/`D`, or the on-screen steering control)
-  increases `data-testid="front-utilisation"` and/or
-  `data-testid="rear-utilisation"` in the instrument panel in real time, and
-  `data-testid="speed"` and `data-testid="path-offset"` show the car actually
-  moving and departing from the reference line, not just the percentages
-  changing; once combined demand exceeds 100% on an axle,
-  `data-testid="state-label"`'s text changes from `Stable` to `Understeer`,
-  `Oversteer`, or `Four-wheel slide`, `data-testid="state-explanation"`
-  updates to name the saturated axle in plain language, and the car's
-  position visibly departs from the reference line drawn through the corner.
-  Switching `data-testid="drivetrain-*"` changes which axle reaches
-  saturation first for the same inputs; switching `data-testid="surface-*"`
-  changes how much throttle/steering combination it takes to reach
-  saturation at all. Steering at a fixed dry-baseline fraction of full lock
-  (see `DRY_BASELINE_STEERING_FRACTION` in `docs/model-assumptions.md`) is
-  the reference input that should track the corner's reference line on a dry
-  surface from the documented entry speed.
+  the visitor presses `data-testid="start-run"`, which enters the corner at a
+  documented entry speed and plays back a fixed-duration (`RUN_DURATION_SECONDS`),
+  fully deterministic run using whatever `data-testid="drivetrain-*"`,
+  `data-testid="surface-*"`, `data-testid="throttle-intensity-*"`, and
+  `data-testid="throttle-timing-*"` are currently selected. Over that run,
+  `data-testid="front-utilisation"` and/or `data-testid="rear-utilisation"`
+  rise in the instrument panel, and `data-testid="speed"` and
+  `data-testid="path-offset"` show the car actually moving and departing from
+  the reference line, not just the percentages changing; once combined
+  demand exceeds 100% on an axle, `data-testid="state-label"`'s text changes
+  from `Stable` to `Understeer`, `Oversteer`, or `Four-wheel slide`, and
+  `data-testid="state-explanation"` updates to name the saturated axle in
+  plain language. The run ends in an explicit `Finished` phase that holds the
+  car's settled final state; pressing `data-testid="start-run"` again from
+  `Finished` — with no forced Reset in between — starts a fresh, independent
+  run from the current settings, which is how a visitor compares one setting
+  change against the last run. The four setting pickers are disabled only
+  while a run is actually in progress, and re-enabled the moment it reaches
+  `Finished`. Switching `data-testid="drivetrain-*"` changes which axle
+  reaches saturation first for an identical script; switching
+  `data-testid="surface-*"` changes how much throttle it takes to reach
+  saturation at all; switching `data-testid="throttle-timing-*"` with every
+  other setting held fixed changes *when* (or whether) saturation happens
+  within the run. The fixed autosteer target (a dry-baseline fraction of full
+  lock — see `DRY_BASELINE_STEERING_FRACTION` in `docs/model-assumptions.md`)
+  is calibrated to track the corner's reference line on a dry surface from
+  the documented entry speed.
 - **Audience**: someone with everyday car-passenger intuition (turning,
   speeding up, braking are all familiar) but no vehicle-dynamics background.
   They do not need to know what a friction circle, slip angle, or bicycle
@@ -66,17 +86,22 @@ untouched, either the job was tiny or nobody read it.
   real vehicle makes or performance claims; downloaded 3D models; a
   long-form tutorial. Full exclusion list and rationale in the top-level
   assignment brief this file narrows.
-- **Edge cases that matter**: keyboard-only driving (Arrow keys and WASD,
-  Enter/Space for buttons); touch controls sized and reachable on a 390×844
-  phone with no hover dependency; resizing from desktop to phone mid-run
-  without losing simulation state or throwing console errors; a
-  `prefers-reduced-motion` visitor still gets the full instrument-panel
-  explanation even with camera motion and easing reduced; a visitor who
-  never touches the surface/drivetrain controls, but does press
-  `data-testid="start-run"`, still reaches a saturation state within the
-  default corner and forgiving first-run configuration; releasing every
-  pedal brings the car to and holds it at a true stop rather than coasting
-  indefinitely or reversing through zero.
+- **Edge cases that matter**: keyboard-only operation (Tab between setting
+  pickers and the Run/Reset buttons, Enter/Space to activate them — there is
+  no continuous arrow-key driving to support anymore); touch targets sized
+  and reachable on a 390×844 phone with no hover dependency; resizing from
+  desktop to phone mid-run without losing simulation state or throwing
+  console errors; a `prefers-reduced-motion` visitor still gets the full
+  instrument-panel explanation even with camera motion and easing reduced;
+  a visitor who never touches the drivetrain/surface/throttle pickers, but
+  does press `data-testid="start-run"`, still reaches a saturation state
+  within the default corner and forgiving first-run configuration; pressing
+  `data-testid="start-run"` again from `Finished` (no forced Reset) starts a
+  clean independent run rather than continuing or accumulating state from
+  the previous one; setting pickers stay disabled for the whole of a run in
+  progress and re-enable the instant it reaches `Finished`, so a visitor
+  can't change a setting mid-run and get a result that mixes two
+  configurations.
 
 ## Model assumptions (must stay visible, not just in code)
 
@@ -98,8 +123,11 @@ Machine-checkable (write a test in `spec/assignment-1.test.ts` or
   CLAUDE.md).
 - #4 the interaction — `spec/assignment-1.test.ts` (rewritten to assert the
   semantic DOM contract above ships in the built markup) plus
-  `e2e/viewport.spec.ts` (asserts the live behaviour: throttle-while-steering
-  changes utilisation and, once saturated, the state label).
+  `e2e/viewport.spec.ts` (asserts the live behaviour: selecting settings and
+  pressing `start-run` drives real motion and rising utilisation, saturation
+  flips the state label, the run settles into `Finished`, and re-pressing
+  `start-run` from `Finished` without a Reset in between starts a fresh,
+  independent run under the current settings).
 - #6 files exist / commits cite real SHAs — already covered by
   `scripts/check-evidence.ts`, shipped.
 

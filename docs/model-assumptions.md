@@ -80,16 +80,71 @@ budget; drivetrain only changes which axle receives the throttle share.
 - **`SURFACE_PRESETS` (dry `μ=1.0`, wet `μ=0.7`, ice `μ=0.3`).** A relative,
   illustrative ordering — not measured coefficients for any real compound,
   temperature, or water/ice depth.
+- **`RUN_DURATION_SECONDS = 6`.** The fixed length of every run, from
+  `startRun` to the `"finished"` phase. Calibrated as one scenario together
+  with `ENTRY_SPEED` and the throttle-timing thresholds below: long enough
+  that even the "late" onset has clear runway (`thresholdSeconds` plus the
+  ~0.83s full-throttle ramp) to show a saturation contrast against "early"
+  before the run ends, short enough to stay a legible, watchable playback.
+- **`THROTTLE_INTENSITY_PRESETS` (light `0.4`, medium `0.7`, full `1.0`,
+  each a fraction of `maxEngineForce`).** Same discipline as
+  `SURFACE_PRESETS` — a documented teaching ordering, not a claim about a
+  real accelerator pedal's travel.
+- **`THROTTLE_TIMING_PRESETS` (early `0s`, mid `2.5s`, late `4.5s` elapsed
+  run time before throttle starts ramping in).** The demonstrative piece of
+  the discrete-run redesign: kinematic curvature from the fixed autosteer
+  target is speed-independent, but the *lateral force needed* to hold that
+  curvature scales with `vx²`, and `ROLLING_RESISTANCE_FORCE` steadily bleeds
+  speed off the car while it coasts. So lateral demand is highest right after
+  corner entry and eases the longer the car coasts — applying the same
+  throttle intensity "early" stacks longitudinal demand on top of that peak
+  lateral demand and saturates an axle sooner than the identical intensity
+  applied "late". This falls directly out of the existing, untouched
+  friction-circle model; it required no change to `physics.ts`. Calibrated
+  together with `RUN_DURATION_SECONDS` and `throttleRampPerSecond`: "late"
+  still leaves ~1.5s of runway — more than the ~0.83s full-throttle ramp —
+  for the contrast to be visible before the run ends.
 
 ## Experiment lifecycle
 
-The car does not move on page load or after Reset: `createInitialState`
-returns phase `"ready"`, and `step` is a no-op while `phase !== "running"`.
-The visitor presses the explicit `data-testid="start-run"` control to begin a
-run (`startRun`), which sets the car to `ENTRY_SPEED` and flips the phase to
-`"running"`. This exists because an inert "ready" state and a moving
-"running" state look identical to a test that only checks utilisation
-percentages and state labels — see bug #5 below.
+The visitor never drives in real time. Before a run, they choose four
+discrete settings — drivetrain, surface, throttle intensity, throttle
+timing — each a `<button>` with a `data-testid`, never a held key or pointer
+control. Pressing the explicit `data-testid="start-run"` control (`startRun`)
+sets the car to `ENTRY_SPEED` and flips the phase from `"ready"` (or
+`"finished"`) to `"running"`; the car does not move on page load or after
+Reset, or ever between runs — `createInitialState` returns phase `"ready"`,
+and `step` is a no-op while `phase !== "running"`. This exists because an
+inert "ready" state and a moving "running" state look identical to a test
+that only checks utilisation percentages and state labels — see bug #5
+below.
+
+Once running, the car's whole control input — steering *and* throttle — is
+computed by `controlsAtElapsed(elapsed, throttleIntensity, throttleTiming,
+params)` (`inputs.ts`): a pure, closed-form function of elapsed run time,
+not an iterative accumulation of held-button state. Steering always ramps
+toward the same fixed autosteer target, `-DRY_BASELINE_STEERING_FRACTION`,
+at `steerRampPerSecond`, from the instant the run starts — it is never a
+second variable the visitor adjusts, so any behavioural difference between
+two runs is attributable to the settings that changed, not to how well the
+visitor steered. Throttle stays at exactly 0 until the selected timing
+threshold, then ramps toward the selected intensity fraction at
+`throttleRampPerSecond`. Brake is always 0 — braking is out of scope for
+this interaction model. Because both ramps are pure functions of elapsed
+time and the settings, the same (drivetrain, surface, intensity, timing)
+tuple reproduces bit-for-bit identical output on every run.
+
+When `elapsed` reaches `RUN_DURATION_SECONDS`, the phase flips to
+`"finished"` and the car holds its settled state — `step` no-ops exactly as
+it does in `"ready"`. The four setting pickers are disabled only while
+`phase === "running"`, and re-enable the instant it reaches `"finished"`, so
+a run in progress can't be given an inconsistent mix of two configurations.
+Pressing `data-testid="start-run"` again works identically from `"ready"` or
+`"finished"` — no forced Reset in between — which is the entire "change one
+setting and compare" mechanic: pick a new value, press Run, and see a fresh,
+independent run under the new settings. `data-testid="reset"` remains
+available in every phase and always returns to the deterministic inert
+`"ready"` state.
 
 ## What went wrong first, and what that changed
 

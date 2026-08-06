@@ -23,34 +23,35 @@ describe("core interaction (assignment-1 spec #4): grip-budget markup contract",
     });
   };
 
-  describe("driving controls (the trigger side of the interaction)", () => {
-    required("throttle", "the visitor must be able to add longitudinal demand");
-    required("brake", "the visitor must be able to shed speed/add longitudinal demand");
-    required("steer-left", "the visitor must be able to add lateral demand one way");
-    required("steer-right", "the visitor must be able to add lateral demand the other way");
+  describe("run controls (the trigger side of the interaction)", () => {
     required("start-run", "the visitor must be able to explicitly begin a run rather than one auto-launching");
     required("reset", "the visitor must be able to repeat the same corner from the same start");
   });
 
-  describe("experiment settings (change which axle spends the budget)", () => {
+  describe("experiment settings (discrete pre-run choices, not real-time input)", () => {
     required("drivetrain-fwd", "FWD must be selectable");
     required("drivetrain-rwd", "RWD must be selectable");
     required("drivetrain-awd", "AWD must be selectable");
     required("surface-dry", "the high-grip preset must be selectable");
     required("surface-wet", "the medium-grip preset must be selectable");
     required("surface-ice", "the low-grip preset must be selectable");
+    required("throttle-intensity-light", "the light throttle intensity must be selectable");
+    required("throttle-intensity-medium", "the medium throttle intensity must be selectable");
+    required("throttle-intensity-full", "the full throttle intensity must be selectable");
+    required("throttle-timing-early", "the early throttle timing must be selectable");
+    required("throttle-timing-mid", "the mid throttle timing must be selectable");
+    required("throttle-timing-late", "the late throttle timing must be selectable");
   });
 
   describe("semantic state (the target side of the interaction, and non-visual truth)", () => {
-    required("state-label", "stable/understeer/oversteer/slide must be readable as text, not just colour");
+    required("state-label", "ready/stable/understeer/oversteer/slide/finished must be readable as text, not just colour");
     required("state-explanation", "the plain-language explanation of the current state must exist");
     required("front-utilisation", "front-axle grip usage must be readable as a number, not just a gauge");
     required("rear-utilisation", "rear-axle grip usage must be readable as a number, not just a gauge");
     required("longitudinal-g", "longitudinal G must be exposed as text");
     required("lateral-g", "lateral G must be exposed as text");
-    required("steering-value", "the current steering input must be exposed as text");
-    required("throttle-value", "the current throttle input must be exposed as text");
-    required("brake-value", "the current brake input must be exposed as text");
+    required("steering-value", "the current autosteer telemetry must be exposed as text");
+    required("throttle-value", "the current throttle telemetry must be exposed as text");
     required("speed", "actual motion (not just utilisation percentages) must be readable as text");
     required(
       "path-offset",
@@ -58,8 +59,24 @@ describe("core interaction (assignment-1 spec #4): grip-budget markup contract",
     );
   });
 
-  it("all driving controls are real buttons, so Enter/Space and touch both work", () => {
-    for (const testid of ["throttle", "brake", "steer-left", "steer-right", "start-run", "reset"]) {
+  it("all setting pickers and run controls are real buttons, so Enter/Space and touch both work", () => {
+    const testids = [
+      "start-run",
+      "reset",
+      "drivetrain-fwd",
+      "drivetrain-rwd",
+      "drivetrain-awd",
+      "surface-dry",
+      "surface-wet",
+      "surface-ice",
+      "throttle-intensity-light",
+      "throttle-intensity-medium",
+      "throttle-intensity-full",
+      "throttle-timing-early",
+      "throttle-timing-mid",
+      "throttle-timing-late",
+    ];
+    for (const testid of testids) {
       const el = doc.querySelector(`[data-testid="${testid}"]`);
       expect(el?.tagName, `[data-testid="${testid}"] should be a <button>`).toBe("BUTTON");
     }

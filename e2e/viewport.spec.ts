@@ -4,17 +4,20 @@ import { expect, test } from "@playwright/test";
 // spec/brief.md's "core interaction, stated testably" into real-browser
 // checks. Runs against the built site via playwright.config.ts's webServer.
 //
-// The interaction: the car sits at rest ("Ready") until the visitor presses
-// Start, which enters the corner at the documented entry speed. From there,
-// holding the throttle control while steering is deflected raises front/rear
-// axle utilisation; sustained saturation flips the visible state label and
-// explanation, and moves the car off the reference line (readable both from
-// data-testid="speed"/"path-offset" and from the utilisation instruments).
-// Drivetrain and surface controls change how/when that saturation happens.
+// The interaction is now a discrete pre-run experiment, not real-time
+// driving: the visitor picks drivetrain/surface/throttle-intensity/
+// throttle-timing, presses Run, and watches a fixed-duration (6s)
+// deterministic playback settle into a "finished" state. Changing one
+// setting and pressing Run again — without a forced Reset in between — is
+// the whole comparison mechanic this file exercises.
 const VIEWPORTS = [
   { name: "desktop", width: 1920, height: 1080 },
   { name: "phone", width: 390, height: 844 },
 ] as const;
+
+// Must match src/simulation/constants.ts's RUN_DURATION_SECONDS.
+const RUN_DURATION_MS = 6000;
+const FINISH_TIMEOUT_MS = RUN_DURATION_MS + 3000;
 
 async function readNumber(page: import("@playwright/test").Page, testid: string): Promise<number> {
   const text = await page.getByTestId(testid).textContent();
@@ -22,17 +25,11 @@ async function readNumber(page: import("@playwright/test").Page, testid: string)
   return Number.isNaN(n) ? 0 : n;
 }
 
-// Holds a button-style control for a simulated duration by dispatching the
-// pointer down/up pair, giving the fixed-step simulation time to integrate.
-async function holdControl(
-  page: import("@playwright/test").Page,
-  testid: string,
-  ms: number,
-): Promise<void> {
-  const control = page.getByTestId(testid);
-  await control.dispatchEvent("pointerdown");
-  await page.waitForTimeout(ms);
-  await control.dispatchEvent("pointerup");
+async function runToFinish(page: import("@playwright/test").Page): Promise<void> {
+  await page.getByTestId("start-run").click();
+  await expect(page.getByTestId("state-label")).toContainText("Finished", {
+    timeout: FINISH_TIMEOUT_MS,
+  });
 }
 
 for (const viewport of VIEWPORTS) {
@@ -57,159 +54,163 @@ for (const viewport of VIEWPORTS) {
       ).toBeLessThanOrEqual(viewport.width);
     });
 
-    test("the car sits at rest until start-run is pressed", async ({ page }) => {
+    test("the car sits at rest until Run is pressed, even while changing settings", async ({ page }) => {
       await page.goto("/");
       await page.getByTestId("reset").click();
       await expect(page.getByTestId("state-label")).toHaveText("Ready");
-      expect(
-        await readNumber(page, "speed"),
-        "the car must be at rest before Start is pressed",
-      ).toBe(0);
+      expect(await readNumber(page, "speed"), "the car must be at rest before Run is pressed").toBe(0);
 
-      // Driving inputs before Start must be inert — this is the lifecycle
-      // gate itself, not just a cosmetic label.
-      await page.getByTestId("steer-right").dispatchEvent("pointerdown");
-      await holdControl(page, "throttle", 1000);
-      await page.getByTestId("steer-right").dispatchEvent("pointerup");
+      // Settings are pre-run choices now, not live controls — picking one
+      // before Run must not move the car.
+      await page.getByTestId("surface-wet").click();
+      await page.getByTestId("throttle-intensity-full").click();
       await expect(
         page.getByTestId("state-label"),
-        "holding throttle/steering before Start must not move the car",
+        "changing settings before Run must not leave the Ready phase",
       ).toHaveText("Ready");
       expect(await readNumber(page, "speed"), "the car must still be at rest").toBe(0);
 
       await page.getByTestId("start-run").click();
       await expect(
         page.getByTestId("state-label"),
-        "Start should leave the Ready phase for a real driving state",
+        "Run should leave the Ready phase for a real driving state",
       ).not.toHaveText("Ready");
       expect(
         await readNumber(page, "speed"),
-        "Start should put the car in motion at the documented entry speed",
+        "Run should put the car in motion at the documented entry speed",
       ).toBeGreaterThan(5);
     });
 
-    test("speed and path-offset show real motion once running, not just a rising percentage", async ({
-      page,
-    }) => {
+    test("a full run drives real motion and settles into a finished state", async ({ page }) => {
+      test.setTimeout(FINISH_TIMEOUT_MS + 5000);
       await page.goto("/");
       await page.getByTestId("reset").click();
-      await page.getByTestId("start-run").click();
       const offsetBefore = await readNumber(page, "path-offset");
 
-      await page.getByTestId("steer-right").dispatchEvent("pointerdown");
-      await holdControl(page, "throttle", 1500);
-      await page.getByTestId("steer-right").dispatchEvent("pointerup");
+      await runToFinish(page);
 
       const speedAfter = await readNumber(page, "speed");
       const offsetAfter = await readNumber(page, "path-offset");
-      expect(speedAfter, "speed should read real, non-zero motion once running").toBeGreaterThan(1);
+      expect(speedAfter, "speed should read real, non-zero motion after a run").toBeGreaterThan(1);
       expect(
         Math.abs(offsetAfter - offsetBefore),
-        "sustained steering+throttle should move the car off the reference line, not just raise a percentage",
+        "the autosteer program should move the car off the reference line over a full run",
       ).toBeGreaterThan(0.05);
     });
 
-    test("holding throttle while steering raises axle utilisation, by pointer", async ({ page }) => {
-      await page.goto("/");
-      await page.getByTestId("reset").click();
-      await page.getByTestId("start-run").click();
-      const before = await readNumber(page, "front-utilisation");
-      await page.getByTestId("steer-right").dispatchEvent("pointerdown");
-      await holdControl(page, "throttle", 1500);
-      await page.getByTestId("steer-right").dispatchEvent("pointerup");
-      const after = await readNumber(page, "front-utilisation");
-      expect(after, "front-utilisation should rise once throttle is held while steering").toBeGreaterThan(
-        before,
-      );
-    });
-
-    test("keyboard activation (Arrow keys) produces the same class of change as pointer", async ({
+    test("throttle telemetry stays at 0% before the selected timing threshold, then reaches full", async ({
       page,
     }) => {
+      test.setTimeout(FINISH_TIMEOUT_MS + 5000);
       await page.goto("/");
+      await page.getByTestId("throttle-intensity-full").click();
+      await page.getByTestId("throttle-timing-late").click(); // 4.5s threshold
       await page.getByTestId("reset").click();
+
       await page.getByTestId("start-run").click();
-      const before = await readNumber(page, "rear-utilisation");
-      await page.keyboard.down("ArrowRight");
-      await page.keyboard.down("ArrowUp");
-      await page.waitForTimeout(1500);
-      await page.keyboard.up("ArrowUp");
-      await page.keyboard.up("ArrowRight");
-      const after = await readNumber(page, "rear-utilisation");
-      expect(after, "rear-utilisation should rise from keyboard steering+throttle too").toBeGreaterThan(
-        before,
-      );
+      await page.waitForTimeout(1000); // well before the 4.5s "late" threshold
+      expect(
+        await readNumber(page, "throttle-value"),
+        "throttle telemetry must read exactly 0% before the timing threshold is reached",
+      ).toBe(0);
+
+      await expect(page.getByTestId("state-label")).toContainText("Finished", {
+        timeout: FINISH_TIMEOUT_MS,
+      });
+      expect(
+        await readNumber(page, "throttle-value"),
+        "by the end of the run, throttle should have ramped up past the timing threshold",
+      ).toBeGreaterThan(50);
     });
 
-    test("selecting RWD changes which axle saturates first, versus FWD", async ({ page }) => {
+    test("throttle telemetry ramps toward the selected intensity, not always to full", async ({ page }) => {
+      test.setTimeout(FINISH_TIMEOUT_MS + 5000);
       await page.goto("/");
+      await page.getByTestId("throttle-intensity-light").click();
+      await page.getByTestId("throttle-timing-early").click();
+      await page.getByTestId("reset").click();
+
+      await page.getByTestId("start-run").click();
+      await page.waitForTimeout(1500); // past light's ~0.33s ramp-in time
+      const lightThrottle = await readNumber(page, "throttle-value");
+      expect(lightThrottle, "light intensity should settle near its 40% fraction, not 100%").toBeLessThan(60);
+      expect(lightThrottle).toBeGreaterThan(20);
+    });
+
+    // Sampled ~3s into the run (not at "finished") on purpose: by the full 6s
+    // duration a sustained full-throttle+early script has usually pushed the
+    // car into a hard multi-second slide at very high speed, where utilisation
+    // readings balloon well past 100% for every drivetrain alike and stop
+    // ordering cleanly — the same 2-4s window src/simulation/behaviour.test.ts
+    // section D samples at, before that regime, is what actually shows the
+    // drivetrain/surface contrast.
+    const MID_RUN_SAMPLE_MS = 3000;
+
+    test("selecting RWD changes which axle saturates most, versus FWD", async ({ page }) => {
+      test.setTimeout(MID_RUN_SAMPLE_MS * 2 + 8000);
+      await page.goto("/");
+      await page.getByTestId("throttle-intensity-full").click();
+      await page.getByTestId("throttle-timing-early").click();
 
       await page.getByTestId("drivetrain-fwd").click();
       await page.getByTestId("reset").click();
       await page.getByTestId("start-run").click();
-      await page.getByTestId("steer-right").dispatchEvent("pointerdown");
-      await holdControl(page, "throttle", 2000);
+      await page.waitForTimeout(MID_RUN_SAMPLE_MS);
       const fwdFront = await readNumber(page, "front-utilisation");
       const fwdRear = await readNumber(page, "rear-utilisation");
-      await page.getByTestId("steer-right").dispatchEvent("pointerup");
+      await page.getByTestId("reset").click();
 
       await page.getByTestId("drivetrain-rwd").click();
       await page.getByTestId("reset").click();
       await page.getByTestId("start-run").click();
-      await page.getByTestId("steer-right").dispatchEvent("pointerdown");
-      await holdControl(page, "throttle", 2000);
+      await page.waitForTimeout(MID_RUN_SAMPLE_MS);
       const rwdFront = await readNumber(page, "front-utilisation");
       const rwdRear = await readNumber(page, "rear-utilisation");
-      await page.getByTestId("steer-right").dispatchEvent("pointerup");
 
-      // FWD pushes drive demand onto the front axle, RWD onto the rear, so
-      // for the same steering+throttle input FWD's front share should exceed
-      // RWD's, and RWD's rear share should exceed FWD's.
       expect(fwdFront, "FWD should load the front axle more than RWD does").toBeGreaterThan(rwdFront);
       expect(rwdRear, "RWD should load the rear axle more than FWD does").toBeGreaterThan(fwdRear);
     });
 
-    test("selecting the low-grip surface lowers the throttle needed to saturate an axle", async ({
-      page,
-    }) => {
+    test("selecting the low-grip surface raises utilisation over the identical script", async ({ page }) => {
+      test.setTimeout(MID_RUN_SAMPLE_MS * 2 + 8000);
       await page.goto("/");
+      await page.getByTestId("throttle-intensity-full").click();
+      await page.getByTestId("throttle-timing-early").click();
 
       await page.getByTestId("surface-dry").click();
       await page.getByTestId("reset").click();
       await page.getByTestId("start-run").click();
-      await page.getByTestId("steer-right").dispatchEvent("pointerdown");
-      await holdControl(page, "throttle", 1200);
+      await page.waitForTimeout(MID_RUN_SAMPLE_MS);
       const dryUtil = Math.max(
         await readNumber(page, "front-utilisation"),
         await readNumber(page, "rear-utilisation"),
       );
-      await page.getByTestId("steer-right").dispatchEvent("pointerup");
+      await page.getByTestId("reset").click();
 
       await page.getByTestId("surface-ice").click();
       await page.getByTestId("reset").click();
       await page.getByTestId("start-run").click();
-      await page.getByTestId("steer-right").dispatchEvent("pointerdown");
-      await holdControl(page, "throttle", 1200);
+      await page.waitForTimeout(MID_RUN_SAMPLE_MS);
       const iceUtil = Math.max(
         await readNumber(page, "front-utilisation"),
         await readNumber(page, "rear-utilisation"),
       );
-      await page.getByTestId("steer-right").dispatchEvent("pointerup");
 
-      expect(iceUtil, "the same inputs should use more of the ice preset's smaller grip budget").toBeGreaterThan(
-        dryUtil,
-      );
+      expect(
+        iceUtil,
+        "the same script should use more of the ice preset's smaller grip budget",
+      ).toBeGreaterThan(dryUtil);
     });
 
-    test("reset returns state, steering and utilisation to the initial values", async ({ page }) => {
+    test("reset returns state, speed, and utilisation to the initial values", async ({ page }) => {
+      test.setTimeout(FINISH_TIMEOUT_MS + 5000);
       await page.goto("/");
       await page.getByTestId("reset").click();
       const initialState = await page.getByTestId("state-label").textContent();
-      await page.getByTestId("start-run").click();
-      await page.getByTestId("steer-right").dispatchEvent("pointerdown");
-      await holdControl(page, "throttle", 1500);
-      await page.getByTestId("steer-right").dispatchEvent("pointerup");
+
+      await runToFinish(page);
       await page.getByTestId("reset").click();
+
       await expect(page.getByTestId("state-label")).toHaveText(initialState ?? "Ready");
       const front = await readNumber(page, "front-utilisation");
       const rear = await readNumber(page, "rear-utilisation");
@@ -218,13 +219,49 @@ for (const viewport of VIEWPORTS) {
       expect(await readNumber(page, "speed"), "reset should return the car to rest").toBe(0);
     });
 
-    test("all controls remain keyboard-focusable", async ({ page }) => {
+    test("pressing Run again from finished starts a fresh run without a forced Reset", async ({ page }) => {
+      test.setTimeout(FINISH_TIMEOUT_MS * 2 + 5000);
+      await page.goto("/");
+      await page.getByTestId("reset").click();
+      await runToFinish(page);
+
+      // No Reset click here — Run must work directly from "finished".
+      await page.getByTestId("start-run").click();
+      await expect(
+        page.getByTestId("state-label"),
+        "Run from finished should leave the finished label for a fresh running state",
+      ).not.toContainText("Finished");
+      expect(
+        await readNumber(page, "speed"),
+        "Run from finished should re-enter the corner at the documented entry speed",
+      ).toBeGreaterThan(5);
+
+      await expect(page.getByTestId("state-label")).toContainText("Finished", {
+        timeout: FINISH_TIMEOUT_MS,
+      });
+    });
+
+    test("setting pickers are disabled only while a run is in progress", async ({ page }) => {
+      test.setTimeout(FINISH_TIMEOUT_MS + 5000);
+      await page.goto("/");
+      await page.getByTestId("reset").click();
+      await expect(page.getByTestId("drivetrain-fwd")).toBeEnabled();
+      await expect(page.getByTestId("throttle-intensity-full")).toBeEnabled();
+
+      await page.getByTestId("start-run").click();
+      await expect(page.getByTestId("drivetrain-fwd")).toBeDisabled();
+      await expect(page.getByTestId("throttle-intensity-full")).toBeDisabled();
+
+      await expect(page.getByTestId("state-label")).toContainText("Finished", {
+        timeout: FINISH_TIMEOUT_MS,
+      });
+      await expect(page.getByTestId("drivetrain-fwd")).toBeEnabled();
+      await expect(page.getByTestId("throttle-intensity-full")).toBeEnabled();
+    });
+
+    test("all setting pickers and run controls remain keyboard-focusable", async ({ page }) => {
       await page.goto("/");
       for (const testid of [
-        "steer-left",
-        "steer-right",
-        "throttle",
-        "brake",
         "start-run",
         "reset",
         "drivetrain-fwd",
@@ -233,6 +270,12 @@ for (const viewport of VIEWPORTS) {
         "surface-dry",
         "surface-wet",
         "surface-ice",
+        "throttle-intensity-light",
+        "throttle-intensity-medium",
+        "throttle-intensity-full",
+        "throttle-timing-early",
+        "throttle-timing-mid",
+        "throttle-timing-late",
       ]) {
         await page.getByTestId(testid).focus();
         await expect(page.getByTestId(testid)).toBeFocused();
@@ -241,9 +284,8 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
-test("survives a resize mid-interaction, keeping simulation state and no console errors", async ({
-  page,
-}) => {
+test("survives a resize mid-run, keeping simulation state and no console errors", async ({ page }) => {
+  test.setTimeout(FINISH_TIMEOUT_MS + 5000);
   await page.setViewportSize({ width: 1920, height: 1080 });
   const errors: string[] = [];
   page.on("console", (msg) => {
@@ -252,15 +294,13 @@ test("survives a resize mid-interaction, keeping simulation state and no console
   await page.goto("/");
   await page.getByTestId("reset").click();
   await page.getByTestId("start-run").click();
-  await page.getByTestId("steer-right").dispatchEvent("pointerdown");
-  await holdControl(page, "throttle", 1000);
+  await page.waitForTimeout(1000);
   const before = await readNumber(page, "front-utilisation");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(100);
   const after = await readNumber(page, "front-utilisation");
-  await page.getByTestId("steer-right").dispatchEvent("pointerup");
 
-  expect(errors, `console errors after mid-interaction resize: ${errors.join("; ")}`).toEqual([]);
+  expect(errors, `console errors after mid-run resize: ${errors.join("; ")}`).toEqual([]);
   expect(
     Math.abs(after - before),
     "resizing mid-run should not reset or discontinuously jump the simulation state",

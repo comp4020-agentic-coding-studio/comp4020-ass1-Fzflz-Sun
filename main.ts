@@ -1,15 +1,21 @@
 import { createGripScene } from "./src/rendering/scene.ts";
 import {
   CAR_PARAMS,
+  controlsAtElapsed,
   createInitialState,
   FIXED_TIMESTEP,
-  rampControls,
+  RUN_DURATION_SECONDS,
   startRun,
   step,
   TRACK_PARAMS,
 } from "./src/simulation/index.ts";
-import type { DrivetrainId, SimState, SurfaceId } from "./src/simulation/index.ts";
-import { createHeldControlsTracker } from "./src/ui/controls.ts";
+import type {
+  DrivetrainId,
+  SimState,
+  SurfaceId,
+  ThrottleIntensityId,
+  ThrottleTimingId,
+} from "./src/simulation/index.ts";
 import { createInstruments } from "./src/ui/instruments.ts";
 
 function required<T extends Element>(selector: string): T {
@@ -18,30 +24,43 @@ function required<T extends Element>(selector: string): T {
   return el;
 }
 
-const steerLeftButton = required<HTMLElement>('[data-testid="steer-left"]');
-const steerRightButton = required<HTMLElement>('[data-testid="steer-right"]');
-const throttleButton = required<HTMLElement>('[data-testid="throttle"]');
-const brakeButton = required<HTMLElement>('[data-testid="brake"]');
 const startButton = required<HTMLElement>('[data-testid="start-run"]');
 const resetButton = required<HTMLElement>('[data-testid="reset"]');
 
-const drivetrainButtons: Array<[DrivetrainId, HTMLElement]> = [
+const drivetrainButtons: Array<[DrivetrainId, HTMLButtonElement]> = [
   ["FWD", required('[data-testid="drivetrain-fwd"]')],
   ["RWD", required('[data-testid="drivetrain-rwd"]')],
   ["AWD", required('[data-testid="drivetrain-awd"]')],
 ];
-const surfaceButtons: Array<[SurfaceId, HTMLElement]> = [
+const surfaceButtons: Array<[SurfaceId, HTMLButtonElement]> = [
   ["dry", required('[data-testid="surface-dry"]')],
   ["wet", required('[data-testid="surface-wet"]')],
   ["ice", required('[data-testid="surface-ice"]')],
 ];
+const throttleIntensityButtons: Array<[ThrottleIntensityId, HTMLButtonElement]> = [
+  ["light", required('[data-testid="throttle-intensity-light"]')],
+  ["medium", required('[data-testid="throttle-intensity-medium"]')],
+  ["full", required('[data-testid="throttle-intensity-full"]')],
+];
+const throttleTimingButtons: Array<[ThrottleTimingId, HTMLButtonElement]> = [
+  ["early", required('[data-testid="throttle-timing-early"]')],
+  ["mid", required('[data-testid="throttle-timing-mid"]')],
+  ["late", required('[data-testid="throttle-timing-late"]')],
+];
 
 let currentDrivetrain: DrivetrainId = "RWD";
 let currentSurface: SurfaceId = "dry";
-let simState: SimState = createInitialState(currentDrivetrain, currentSurface);
+let currentThrottleIntensity: ThrottleIntensityId = "medium";
+let currentThrottleTiming: ThrottleTimingId = "early";
+let simState: SimState = createInitialState(
+  currentDrivetrain,
+  currentSurface,
+  currentThrottleIntensity,
+  currentThrottleTiming,
+);
 
 function selectOption<T extends string>(
-  buttons: Array<[T, HTMLElement]>,
+  buttons: Array<[T, HTMLButtonElement]>,
   value: T,
   apply: (value: T) => void,
 ): void {
@@ -49,12 +68,21 @@ function selectOption<T extends string>(
   apply(value);
 }
 
-const heldControls = createHeldControlsTracker({
-  steerLeft: steerLeftButton,
-  steerRight: steerRightButton,
-  throttle: throttleButton,
-  brake: brakeButton,
-});
+// Discrete pre-run settings are only editable while a run isn't in
+// progress — mid-run they must stay fixed for the comparison to be fair.
+// Both "ready" and "finished" leave them enabled, so a visitor can change a
+// setting and press Run again without a forced Reset in between.
+function updateSettingButtonsDisabled(): void {
+  const disabled = simState.phase === "running";
+  for (const [, el] of [
+    ...drivetrainButtons,
+    ...surfaceButtons,
+    ...throttleIntensityButtons,
+    ...throttleTimingButtons,
+  ]) {
+    el.disabled = disabled;
+  }
+}
 
 const instruments = createInstruments();
 
@@ -63,9 +91,9 @@ let scene: ReturnType<typeof createGripScene> | null = null;
 try {
   scene = createGripScene(canvas, TRACK_PARAMS);
 } catch (error) {
-  // A canvas-less/WebGL-less browser still gets the full instrument-panel
-  // explanation (CLAUDE.md) — the 3D view is a bonus, not the source of truth.
-  console.warn("3D scene unavailable, continuing with instrument panel only:", error);
+  // A canvas-less browser still gets the full instrument-panel explanation
+  // (CLAUDE.md) — the 2D view is a bonus, not the source of truth.
+  console.warn("2D scene unavailable, continuing with instrument panel only:", error);
 }
 
 const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -81,6 +109,7 @@ reducedMotionQuery.addEventListener("change", (event) => {
 function renderImmediately(): void {
   instruments.update(simState);
   scene?.update(simState, reducedMotion);
+  updateSettingButtonsDisabled();
 }
 
 for (const [id, el] of drivetrainButtons) {
@@ -99,29 +128,37 @@ for (const [id, el] of surfaceButtons) {
     renderImmediately();
   });
 }
+for (const [id, el] of throttleIntensityButtons) {
+  el.addEventListener("click", () => {
+    currentThrottleIntensity = id;
+    simState = { ...simState, throttleIntensity: id };
+    selectOption(throttleIntensityButtons, id, () => {});
+    renderImmediately();
+  });
+}
+for (const [id, el] of throttleTimingButtons) {
+  el.addEventListener("click", () => {
+    currentThrottleTiming = id;
+    simState = { ...simState, throttleTiming: id };
+    selectOption(throttleTimingButtons, id, () => {});
+    renderImmediately();
+  });
+}
 
 startButton.addEventListener("click", () => {
+  // Safe from "ready" or "finished" alike — no forced Reset in between.
   simState = startRun(simState);
   accumulator = 0;
   renderImmediately();
 });
 
 resetButton.addEventListener("click", () => {
-  simState = createInitialState(currentDrivetrain, currentSurface);
+  simState = createInitialState(currentDrivetrain, currentSurface, currentThrottleIntensity, currentThrottleTiming);
   accumulator = 0;
-  heldControls.releaseAll();
   renderImmediately();
 });
 
 window.addEventListener("resize", () => scene?.resize());
-
-// A held key/pointer whose release event never reaches us (focus leaves the
-// window mid-hold, the tab is backgrounded, a touch is interrupted by an OS
-// gesture) must not leave a control stuck on indefinitely.
-window.addEventListener("blur", () => heldControls.releaseAll());
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") heldControls.releaseAll();
-});
 
 const MAX_STEPS_PER_FRAME = 8; // caps the catch-up if a tab was backgrounded
 let accumulator = 0;
@@ -135,13 +172,16 @@ function frame(time: number): void {
 
   let steps = 0;
   while (accumulator >= FIXED_TIMESTEP && steps < MAX_STEPS_PER_FRAME) {
-    const controls = rampControls(
-      { steering: simState.steering, throttle: simState.throttle, brake: simState.brake },
-      heldControls.getHeld(),
-      FIXED_TIMESTEP,
+    const controls = controlsAtElapsed(
+      simState.elapsed,
+      simState.throttleIntensity,
+      simState.throttleTiming,
       CAR_PARAMS,
     );
     simState = step(simState, controls, FIXED_TIMESTEP);
+    if (simState.phase === "running" && simState.elapsed >= RUN_DURATION_SECONDS) {
+      simState = { ...simState, phase: "finished" };
+    }
     accumulator -= FIXED_TIMESTEP;
     steps++;
   }
@@ -149,6 +189,7 @@ function frame(time: number): void {
 
   instruments.update(simState);
   scene?.update(simState, reducedMotion);
+  updateSettingButtonsDisabled();
   requestAnimationFrame(frame);
 }
 

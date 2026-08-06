@@ -211,15 +211,17 @@ the agent from drifting off that idea or breaking the harness that tests it.
   accent. Colour is never the only state indicator --- text or shape must
   carry the same information.
 - **Renderer and UI changes must not remove semantic DOM state.** The
-  `data-testid` contract in `spec/assignment-1.test.ts` (driving controls,
-  drivetrain/surface selectors, state label/explanation, front/rear
-  utilisation, longitudinal/lateral G, steering/throttle/brake readouts) is
-  the non-visual truth of the page; a WebGL-only representation of any of
-  that state is not acceptable, canvas-unavailable or not.
-- **No downloaded 3D models, large textures, or external font files.** Car,
-  track, and kerbs are built from primitive Three.js geometry; type with
-  system/local fonts. Get explicit sign-off before adding any binary asset
-  pipeline.
+  `data-testid` contract in `spec/assignment-1.test.ts` (run controls,
+  drivetrain/surface/throttle-intensity/throttle-timing pickers, state
+  label/explanation, front/rear utilisation, longitudinal/lateral G,
+  steering/throttle telemetry) is the non-visual truth of the page; a
+  canvas-only representation of any of that state is not acceptable,
+  canvas-unavailable or not.
+- **No downloaded 3D models, large textures, external font files, or
+  Three.js/WebGL.** The car, road, and reference line are drawn with plain
+  2D canvas primitives (rects, arcs); type with system/local fonts. Get
+  explicit sign-off before adding any binary asset pipeline or 3D rendering
+  back.
 - **Don't add another vehicle-dynamics concept** (ABS/ESC/TC, tyre
   temperature/wear, suspension, differential, aero, detailed dynamic weight
   transfer, gear/clutch) unless it directly demonstrates the shared-budget
@@ -256,19 +258,45 @@ the agent from drifting off that idea or breaking the harness that tests it.
   failure from a friction-circle overload, and invisible unless you check
   the car can actually track the reference line, not just that it doesn't
   spin.
-- **The chase camera must track the car's actual direction of travel
-  (velocity heading, or the road tangent), never rigid body heading.** Locking
-  the camera to `state.heading` hides slip angle by definition --- the one
-  thing this prototype exists to make legible --- since the view rotates
-  in lockstep with the car and never shows it pointing one way while moving
-  another.
-- **Pointer-driven controls must track *why* a control is held (a set of
-  source tags), consume a one-shot "pending pulse" flag so a tap shorter than
-  one simulation step still registers, and wrap `setPointerCapture`/
-  `releasePointerCapture` in try/catch.** Both calls throw for a pointerId the
-  browser has no active-pointer record for --- true of any synthetically
-  dispatched `PointerEvent` (Playwright's `dispatchEvent`, or an assistive
-  tool), not just real hardware input --- and an uncaught throw aborts the
-  handler before the press is ever registered, silently dropping it. This was
-  caught by `e2e/viewport.spec.ts`, not by any unit test, because jsdom never
-  exercises real pointer capture.
+- **The 2D scene camera is translate-only and north-up — it must never
+  rotate to track the car's heading or direction of travel.** Rotating the
+  camera with the car would hide slip angle by definition (the one thing
+  this prototype exists to make legible): a fixed-orientation, bird's-eye
+  view is what lets a saturated rear axle's body heading visibly diverge
+  from its actual travel direction. (The old 3D chase camera had the
+  opposite rule — track velocity heading, never rigid body heading — because
+  a rotating camera has no fixed reference to show slip against at all; the
+  2D top-down view sidesteps that problem entirely rather than solving it
+  the same way.)
+- **Driving input is a set of discrete, pre-run settings played back
+  deterministically — never real-time steering/throttle held by the
+  visitor.** This was a deliberate redesign: real-time input makes visitor
+  skill (how well they steer or modulate throttle) a second variable
+  entangled with the thing the prototype teaches (the shared per-axle grip
+  budget). `controlsAtElapsed(elapsed, throttleIntensity, throttleTiming,
+  params)` is a pure, closed-form function of elapsed time and the four
+  settings — steering always ramps toward the same fixed autosteer target,
+  never a visitor input. Reopening real-time driving input requires
+  deliberately revisiting this confound, not just wiring up held buttons
+  again.
+- **Throttle-timing thresholds (`THROTTLE_TIMING_PRESETS`) are not a
+  standalone tuning knob** --- same discipline as `maxSteerAngle`. They must
+  be calibrated together with `RUN_DURATION_SECONDS`, `ENTRY_SPEED`, and
+  `throttleRampPerSecond` as one scenario: the latest threshold needs enough
+  runway before the run ends for its saturation contrast against the
+  earliest threshold to actually appear, and `RUN_DURATION_SECONDS` itself
+  must stay short enough to be a legible, watchable single playback.
+- **Historical pointer-capture lesson (kept for any future pointer-based
+  interaction, even though `HeldControls`/pointer-capture code no longer
+  exists in this repo):** a held pointer control must track *why* it's held
+  (a set of source tags), consume a one-shot "pending pulse" flag so a tap
+  shorter than one simulation step still registers, and wrap
+  `setPointerCapture`/`releasePointerCapture` in try/catch --- both calls
+  throw for a pointerId the browser has no active-pointer record for, true
+  of any synthetically dispatched `PointerEvent` (Playwright's
+  `dispatchEvent`, or an assistive tool), and an uncaught throw aborts the
+  handler before the press is ever registered, silently dropping it. This
+  was caught by `e2e/viewport.spec.ts`, not by any unit test, because jsdom
+  never exercises real pointer capture. If a future iteration reintroduces
+  any held/pointer-driven control, re-apply this lesson rather than
+  rediscovering it.

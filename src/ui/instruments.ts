@@ -33,7 +33,7 @@ export interface Instruments {
 
 /** Binds once to the page's data-testid instrument elements and updates
  * their text/attributes from simulation state every frame. This is the
- * non-visual truth of the page (CLAUDE.md) — the 3D scene never carries
+ * non-visual truth of the page (CLAUDE.md) — the 2D scene never carries
  * information that isn't also here as text. */
 export function createInstruments(root: ParentNode = document): Instruments {
   const testid = (id: string): HTMLElement => {
@@ -52,7 +52,6 @@ export function createInstruments(root: ParentNode = document): Instruments {
   const lateralG = testid("lateral-g");
   const steeringValue = testid("steering-value");
   const throttleValue = testid("throttle-value");
-  const brakeValue = testid("brake-value");
 
   const frontMeter = root.querySelector<HTMLElement>("#front-meter");
   const rearMeter = root.querySelector<HTMLElement>("#rear-meter");
@@ -92,14 +91,19 @@ export function createInstruments(root: ParentNode = document): Instruments {
   }
 
   function update(state: SimState): void {
-    // "Ready" is a lifecycle phase, not a handling classification (see
-    // RunPhase in types.ts) — the car sits inert until Start begins a run, so
-    // it gets its own label instead of reporting a stale "Stable" from the
-    // last reset that would wrongly imply the car is already rolling.
+    // "Ready"/"finished" are lifecycle phases, not handling classifications
+    // (see RunPhase in types.ts) — the car sits inert until Run begins a run,
+    // and holds its settled final state once the run's fixed duration
+    // elapses, so both get their own label instead of reporting a stale
+    // "Stable" that would wrongly imply the car is still rolling.
     if (state.phase === "ready") {
       stateLabel.textContent = "Ready";
       stateLabel.dataset.state = "ready";
-      stateExplanation.textContent = "Press Start to enter the corner at a steady speed.";
+      stateExplanation.textContent = "Press Run to enter the corner at a steady speed.";
+    } else if (state.phase === "finished") {
+      stateLabel.textContent = `Finished — ${STATE_LABEL[state.drivingState]}`;
+      stateLabel.dataset.state = "finished";
+      stateExplanation.textContent = `${STATE_EXPLANATION[state.drivingState]} Change a setting and press Run to compare.`;
     } else {
       stateLabel.textContent = STATE_LABEL[state.drivingState];
       stateLabel.dataset.state = state.drivingState;
@@ -119,7 +123,6 @@ export function createInstruments(root: ParentNode = document): Instruments {
     lateralG.textContent = formatG(state.lateralG);
     steeringValue.textContent = formatPercent(Math.abs(state.steering));
     throttleValue.textContent = formatPercent(state.throttle);
-    brakeValue.textContent = formatPercent(state.brake);
 
     if (frontMeter) {
       frontMeter.style.width = `${Math.min(100, state.front.utilisation * 100)}%`;
