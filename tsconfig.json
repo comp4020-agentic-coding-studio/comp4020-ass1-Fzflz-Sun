@@ -10,6 +10,7 @@
     "skipLibCheck": true,
     "moduleDetection": "force",
     "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
     "useDefineForClassFields": true,
     "noFallthroughCasesInSwitch": true
   },

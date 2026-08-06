@@ -15,6 +15,11 @@ course API, carries your harness forward from last week, and helps you turn the
 spec's checkable lines into tests of your own. Read the spec before you build,
 and see `spec/README.md` for how the checks in this repo relate to it.
 
+This deliverable's narrowed brief — the one idea, the one mechanic, the core
+interaction stated as a testable sentence — lives in `spec/brief.md`, not just
+on the course site. It's expected to change during the week; write it with the
+agent, don't just hand it a draft.
+
 ## How to work in here
 
 - Keep the dev server running (`pnpm dev`) so you see changes as you make them.
@@ -35,6 +40,16 @@ and see `spec/README.md` for how the checks in this repo relate to it.
   --- the page is wrong until the check is green, not until you decide it should
   be.
 - Commit when the checks pass. Never commit a red state.
+- After touching the core interaction, run `pnpm test:e2e` (Playwright,
+  `e2e/viewport.spec.ts`) before pushing. It loads the built site at both
+  marking viewports and checks the interaction responds to a click *and* to
+  keyboard activation, then checks nothing breaks if the viewport resizes
+  mid-interaction. A screenshot or a claim of "it works" isn't evidence; this
+  is. It starts red — there's no interaction to find yet — and should turn
+  green the same push that implements the real thing. It isn't wired into CI
+  (a browser install would slow every push down for a check only the
+  interaction-touching commits need); run it locally, deliberately, not as a
+  habit for every unrelated change.
 
 ## The checks (your sensors)
 
@@ -65,6 +80,11 @@ running counts as not green, so ship with time for CI to finish.
   website, whatever the week's brief asks; the tests you write for the week's
   own spec run alongside it (any `spec/*.test.ts`). A failure names the contract
   you haven't met yet.
+- **e2e** (`pnpm test:e2e`, `e2e/viewport.spec.ts`) --- real-browser check, not
+  CI, not shipped by the template: added this week to test the core interaction
+  at both marking viewports, by click and by keyboard, and across a resize
+  mid-interaction. Local-only and not part of `pnpm check` on purpose — see
+  above.
 - **lint** --- `stylelint` for CSS, `oxlint` for TypeScript. Flags code that's
   wrong, fragile, or non-idiomatic. Read the rule it names.
 - **tests** --- any other tests you write, wherever you put them (co-located
@@ -160,3 +180,54 @@ catching you out, a fact about the stack the agent keeps getting wrong --- write
 it down here. Growing this file is the work of harness engineering, and the gap
 between this boilerplate and your own version is part of what your prototype
 says about the developer you're becoming.
+
+## GRIP IS A BUDGET --- project-specific rules
+
+This prototype's one idea (`spec/brief.md`): every tyre has one finite grip
+budget; steering, throttle, and braking all draw on it; drivetrain only
+changes which axle carries the longitudinal share. These rules exist to keep
+the agent from drifting off that idea or breaking the harness that tests it.
+
+- **`src/simulation/` must not import Three.js, the DOM, or anything from
+  `src/rendering/`.** It is the deterministic physics/domain core and must be
+  unit-testable under Vitest/jsdom alone. `src/rendering/` and `src/ui/` read
+  simulation state; they never own it or mutate it directly.
+- **The simulation steps on a fixed timestep and is fully deterministic.**
+  Same input sequence in → same output sequence out, every run. No
+  `Math.random()`, no wall-clock time, no frame-rate-dependent integration in
+  `src/simulation/`. This is what makes the unit tests (FWD/RWD/AWD split,
+  saturation → understeer/oversteer, reset) meaningful.
+- **Every numeric preset (surface μ, cornering stiffness, drivetrain
+  split, brake bias) must be a named, documented constant**, not a magic
+  number inline. If you change one, update `docs/model-assumptions.md` in the
+  same commit --- the assumptions doc and the code must never disagree.
+- **Never encode as fact**: "FWD always understeers", "RWD always
+  oversteers", "AWD can't slide", or that dry/wet/ice map to one universally
+  correct friction coefficient. The surface presets are illustrative and
+  relative; say so in both the UI copy and the docs.
+- **Axle colours are fixed and consistent everywhere they appear** (chase
+  scene, friction-circle instruments, G-G display, text): front = cool
+  cyan/blue, rear = restrained amber, saturation/danger = one coral-red
+  accent. Colour is never the only state indicator --- text or shape must
+  carry the same information.
+- **Renderer and UI changes must not remove semantic DOM state.** The
+  `data-testid` contract in `spec/assignment-1.test.ts` (driving controls,
+  drivetrain/surface selectors, state label/explanation, front/rear
+  utilisation, longitudinal/lateral G, steering/throttle/brake readouts) is
+  the non-visual truth of the page; a WebGL-only representation of any of
+  that state is not acceptable, canvas-unavailable or not.
+- **No downloaded 3D models, large textures, or external font files.** Car,
+  track, and kerbs are built from primitive Three.js geometry; type with
+  system/local fonts. Get explicit sign-off before adding any binary asset
+  pipeline.
+- **Don't add another vehicle-dynamics concept** (ABS/ESC/TC, tyre
+  temperature/wear, suspension, differential, aero, detailed dynamic weight
+  transfer, gear/clutch) unless it directly demonstrates the shared-budget
+  idea. If a feature request threatens that idea's clarity, defer it and say
+  so rather than building it quietly.
+- **After any change to the core interaction, simulation constants, or
+  layout, check both marking viewports (1920×1080 and 390×844) in a
+  real browser, and re-run `pnpm test:e2e` including the resize-mid-run
+  case.** Green `pnpm check` proves the DOM contract and the physics unit
+  tests; it does not prove the camera, saturation motion, or touch layout are
+  legible --- only looking does.

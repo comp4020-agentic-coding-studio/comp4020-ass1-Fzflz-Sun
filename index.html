@@ -3,22 +3,180 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>COMP4020 prototype</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <title>Grip is a Budget — COMP4020</title>
+    <link rel="stylesheet" href="./src/styles/main.css" />
   </head>
   <body>
-    <header>
-      <nav aria-label="Primary">
-        <a href="./">Home</a>
-      </nav>
-    </header>
-    <main>
-      <h1>COMP4020 prototype</h1>
-      <p data-testid="intro">
-        Replace this with your prototype. This week's brief is on the course website;
-        <code>spec/README.md</code> explains how the checks in this repo relate to it.
-      </p>
-    </main>
+    <div class="app">
+      <header class="site-header">
+        <nav aria-label="Primary">
+          <a href="./">Home</a>
+        </nav>
+      </header>
+      <h1>Grip is a budget</h1>
+      <div class="main-area">
+        <div class="stage" data-testid="stage">
+          <canvas data-testid="scene-canvas"></canvas>
+        </div>
+        <aside class="sidebar">
+          <section class="panel" aria-live="polite">
+            <h2>State</h2>
+            <p id="state-label" data-testid="state-label" data-state="stable">Stable</p>
+            <p data-testid="state-explanation" id="state-explanation">
+              Both axles have grip in reserve. Nothing has saturated yet.
+            </p>
+          </section>
+
+          <section class="panel">
+            <h2>Axle grip budgets</h2>
+            <div class="axle-row front">
+              <span class="axle-name">Front</span>
+              <span class="meter">
+                <span class="meter-fill" id="front-meter" data-saturated="false"></span>
+              </span>
+              <span class="axle-value" data-testid="front-utilisation">0%</span>
+            </div>
+            <div class="axle-row rear">
+              <span class="axle-name">Rear</span>
+              <span class="meter">
+                <span class="meter-fill" id="rear-meter" data-saturated="false"></span>
+              </span>
+              <span class="axle-value" data-testid="rear-utilisation">0%</span>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>G-G display</h2>
+            <div class="gg-display">
+              <canvas id="gg-canvas" width="110" height="110"></canvas>
+              <div class="gg-readouts">
+                <p>Longitudinal: <span data-testid="longitudinal-g">0.00 g</span></p>
+                <p>Lateral: <span data-testid="lateral-g">0.00 g</span></p>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Experiment settings</h2>
+            <fieldset>
+              <legend>Drivetrain</legend>
+              <div class="option-group" role="group" aria-label="Drivetrain">
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="drivetrain-fwd"
+                  data-drivetrain="FWD"
+                  aria-pressed="false"
+                >
+                  FWD
+                </button>
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="drivetrain-rwd"
+                  data-drivetrain="RWD"
+                  aria-pressed="true"
+                >
+                  RWD
+                </button>
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="drivetrain-awd"
+                  data-drivetrain="AWD"
+                  aria-pressed="false"
+                >
+                  AWD
+                </button>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>Surface</legend>
+              <div class="option-group" role="group" aria-label="Surface">
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="surface-dry"
+                  data-surface="dry"
+                  aria-pressed="true"
+                >
+                  Dry
+                </button>
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="surface-wet"
+                  data-surface="wet"
+                  aria-pressed="false"
+                >
+                  Wet
+                </button>
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="surface-ice"
+                  data-surface="ice"
+                  aria-pressed="false"
+                >
+                  Ice
+                </button>
+              </div>
+            </fieldset>
+          </section>
+
+          <details class="panel" data-testid="model-assumptions">
+            <summary>About this model</summary>
+            <p>
+              This is a simplified teaching model, not driving instruction. One car, one
+              broad fixed corner, symmetric front/rear load, and a linear tyre model with a
+              friction-circle limit per axle. Steering, throttle, and braking all draw on
+              the same per-axle grip budget; drivetrain only changes which axle carries the
+              longitudinal share — FWD does not always understeer, RWD does not always
+              oversteer, and AWD can still slide if pushed hard enough. Dry/wet/ice are a
+              relative, illustrative grip ordering, not measured coefficients for any real
+              tyre or surface. Full assumptions and tuned constants are documented in this
+              project's <code>docs/model-assumptions.md</code>.
+            </p>
+          </details>
+        </aside>
+      </div>
+
+      <div class="control-bar">
+        <button
+          type="button"
+          class="drive-button"
+          data-testid="steer-left"
+          aria-label="Steer left"
+        >
+          ◀
+        </button>
+        <button
+          type="button"
+          class="drive-button"
+          data-testid="steer-right"
+          aria-label="Steer right"
+        >
+          ▶
+        </button>
+        <button
+          type="button"
+          class="drive-button"
+          data-testid="throttle"
+          aria-label="Throttle"
+        >
+          ▲
+        </button>
+        <button type="button" class="drive-button" id="brake" data-testid="brake" aria-label="Brake">
+          ▼
+        </button>
+        <button type="button" id="reset" data-testid="reset">Reset</button>
+        <div class="control-readouts">
+          <span>Steer: <span data-testid="steering-value">0%</span></span>
+          <span>Throttle: <span data-testid="throttle-value">0%</span></span>
+          <span>Brake: <span data-testid="brake-value">0%</span></span>
+        </div>
+      </div>
+    </div>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>
