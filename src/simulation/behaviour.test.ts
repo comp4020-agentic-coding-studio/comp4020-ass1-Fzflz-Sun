@@ -9,6 +9,7 @@ import type {
   SurfaceId,
   ThrottleIntensityId,
   ThrottleTimingId,
+  TrackId,
 } from "./types.ts";
 
 // Motion-level behavioural tests written against the CURRENT implementation
@@ -43,8 +44,9 @@ function startedRun(
   surface: SurfaceId = "dry",
   throttleIntensity: ThrottleIntensityId = "medium",
   throttleTiming: ThrottleTimingId = "early",
+  track: TrackId = constants.DEFAULT_TRACK_ID,
 ): SimState {
-  const ready = createInitialState(drivetrain, surface, throttleIntensity, throttleTiming);
+  const ready = createInitialState(drivetrain, surface, throttleIntensity, throttleTiming, track);
   // Falls back to the ready state itself (vx whatever createInitialState
   // currently sets it to) when startRun doesn't exist yet — keeps the rest
   // of the test runnable instead of throwing before we get useful output.
@@ -56,7 +58,11 @@ function startedRun(
 // Drives a run using the real deterministic autosteer/throttle program
 // (controlsAtElapsed) instead of hand-built ControlInputs — this is what
 // main.ts's frame loop actually calls, so these tests exercise the same
-// input-generation path a visitor's run does, not a stand-in for it.
+// input-generation path a visitor's run does, not a stand-in for it. Reads
+// the track from `state.track` every step (same TRACK_PRESETS[state.track]
+// lookup pattern step() itself uses) so a run started on a non-default track
+// actually autosteers toward *that* track's own calibrated target, not
+// silently falling back to controlsAtElapsed's DEFAULT_TRACK_ID default.
 function driveAuto(
   state: SimState,
   throttleIntensity: ThrottleIntensityId,
@@ -66,7 +72,8 @@ function driveAuto(
 ): SimState {
   let s = state;
   for (let i = 0; i < steps; i++) {
-    const controls = controlsAtElapsed(s.elapsed, throttleIntensity, throttleTiming, CAR_PARAMS);
+    const track = constants.TRACK_PRESETS[s.track] ?? constants.TRACK_PRESETS[constants.DEFAULT_TRACK_ID];
+    const controls = controlsAtElapsed(s.elapsed, throttleIntensity, throttleTiming, CAR_PARAMS, track);
     s = step(s, controls, dt);
   }
   return s;
@@ -300,7 +307,11 @@ describe("D. drivetrain and surface change motion, not only utilisation numbers"
 // intensity all held identical, only the moment throttle engages differs.
 // ---------------------------------------------------------------------------
 describe("E. throttle timing produces a measurable saturation-timing contrast", () => {
-  const RUN_STEPS = Math.round(constants.RUN_DURATION_SECONDS / FIXED_TIMESTEP);
+  // A generous upper bound on how long to keep stepping while looking for
+  // saturation — SAFETY_CAP_SECONDS (constants.ts) is the run's own backstop
+  // duration, so it's also a safe bound for "long enough to find saturation
+  // if it's going to happen at all" here.
+  const RUN_STEPS = Math.round(constants.SAFETY_CAP_SECONDS / FIXED_TIMESTEP);
 
   function stepsToRearSaturation(throttleTiming: ThrottleTimingId): number {
     let state = startedRun("RWD", "dry");
@@ -326,12 +337,67 @@ describe("E. throttle timing produces a measurable saturation-timing contrast", 
 // ---------------------------------------------------------------------------
 describe("F. full-run determinism", () => {
   it("the same (drivetrain, surface, intensity, timing) tuple produces identical output every run", () => {
-    const RUN_STEPS = Math.round(constants.RUN_DURATION_SECONDS / FIXED_TIMESTEP);
+    const RUN_STEPS = Math.round(constants.SAFETY_CAP_SECONDS / FIXED_TIMESTEP);
 
     function fullRun(): SimState {
       return driveAuto(startedRun("AWD", "wet", "full", "mid"), "full", "mid", RUN_STEPS);
     }
 
     expect(fullRun()).toEqual(fullRun());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G. Track choice is a second, independent demonstration of the shared grip
+// budget: a tighter corner (hairpin) demands more lateral force at the same
+// speed than a gentle sweep, so identical drivetrain/surface/throttle
+// settings saturate an axle sooner on the hairpin — no new physics, just a
+// smaller radius (and, per its own calibration, a larger autosteerFraction)
+// to hold. See spec/brief.md and docs/model-assumptions.md's TRACK_PRESETS
+// section for the calibration reasoning.
+// ---------------------------------------------------------------------------
+describe("G. track choice changes saturation timing — hairpin vs. sweep", () => {
+  // Generous bound, same reasoning as section E's RUN_STEPS.
+  const CAP_STEPS = Math.round(constants.SAFETY_CAP_SECONDS / FIXED_TIMESTEP);
+
+  function stepsToSaturation(
+    track: TrackId,
+    throttleIntensity: ThrottleIntensityId,
+    drivetrain: DrivetrainId = "RWD",
+  ): number {
+    let state = startedRun(drivetrain, "dry", throttleIntensity, "early", track);
+    for (let i = 1; i <= CAP_STEPS; i++) {
+      const trackParams = constants.TRACK_PRESETS[state.track];
+      const controls = controlsAtElapsed(state.elapsed, throttleIntensity, "early", CAR_PARAMS, trackParams);
+      state = step(state, controls, FIXED_TIMESTEP);
+      if (state.front.saturated || state.rear.saturated) return i;
+      if (physics.shouldFinish(state)) break;
+    }
+    return Number.POSITIVE_INFINITY;
+  }
+
+  it("the hairpin reaches axle saturation sooner than the sweep under identical drivetrain/surface/throttle settings", () => {
+    const sweepSteps = stepsToSaturation("sweep-right", "medium");
+    const hairpinSteps = stepsToSaturation("hairpin-right", "medium");
+    expect(hairpinSteps).toBeLessThan(sweepSteps);
+  });
+
+  it("left/right hairpins of the same sharpness saturate at the same point (exact mirror images)", () => {
+    const leftSteps = stepsToSaturation("hairpin-left", "medium");
+    const rightSteps = stepsToSaturation("hairpin-right", "medium");
+    expect(leftSteps).toBe(rightSteps);
+  });
+
+  it("at a throttle intensity too light for the sweep to saturate at all, the tighter hairpin still does (AWD)", () => {
+    // AWD splits drive demand 50/50, leaving more per-axle longitudinal
+    // headroom than FWD/RWD — at "medium" that's enough for the sweep to
+    // stay unsaturated for the whole run, while the hairpin's extra lateral
+    // demand alone tips it over. This is requirement (a)'s literal case: the
+    // same discrete intensity setting saturates on the hairpin but not the
+    // sweep.
+    const sweepSaturates = stepsToSaturation("sweep-right", "medium", "AWD") < Number.POSITIVE_INFINITY;
+    const hairpinSaturates = stepsToSaturation("hairpin-right", "medium", "AWD") < Number.POSITIVE_INFINITY;
+    expect(sweepSaturates).toBe(false);
+    expect(hairpinSaturates).toBe(true);
   });
 });

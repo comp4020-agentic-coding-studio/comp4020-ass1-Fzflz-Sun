@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   CAR_PARAMS,
+  DEFAULT_TRACK_ID,
   DRY_BASELINE_STEERING_FRACTION,
   FIXED_TIMESTEP,
+  SAFETY_CAP_SECONDS,
   SURFACE_PRESETS,
-  TRACK_PARAMS,
+  TRACK_PRESETS,
 } from "./constants.ts";
 import { controlsAtElapsed } from "./inputs.ts";
-import { createInitialState, startRun, step } from "./physics.ts";
-import type { ControlInputs, DrivetrainId, SimState, SurfaceId } from "./types.ts";
+import { createInitialState, shouldFinish, startRun, step } from "./physics.ts";
+import type { ControlInputs, DrivetrainId, SimState, SurfaceId, TrackId } from "./types.ts";
 
 // Drives `n` fixed steps with the same controls each step, returning the
 // final state. Used throughout to push the car hard enough into a corner to
@@ -232,6 +234,63 @@ describe("surface presets", () => {
 describe("track reference line", () => {
   it("the car starts on the reference line (zero path offset)", () => {
     expect(createInitialState().pathOffset).toBe(0);
-    void TRACK_PARAMS;
+  });
+
+  it("a fresh initial state defaults to the default track, with no swept progress yet", () => {
+    const state = createInitialState();
+    expect(state.track).toBe(DEFAULT_TRACK_ID);
+    expect(state.sweptAngle).toBe(0);
+  });
+});
+
+// A run must finish because the car actually reached the end of its track's
+// geometry, not merely because a fixed duration elapsed — otherwise
+// "Finished" could fire mid-corner, before the car has visibly completed the
+// arc (see shouldFinish's doc comment, physics.ts).
+describe("finish condition is position-based, not duration-based", () => {
+  function runToFinish(track: TrackId, throttleIntensity: "medium" | "full" = "medium"): SimState {
+    let state = startRun(createInitialState("RWD", "dry", throttleIntensity, "early", track));
+    const capSteps = Math.round(SAFETY_CAP_SECONDS / FIXED_TIMESTEP);
+    for (let i = 0; i < capSteps; i++) {
+      const trackParams = TRACK_PRESETS[state.track];
+      const controls = controlsAtElapsed(state.elapsed, throttleIntensity, "early", CAR_PARAMS, trackParams);
+      state = step(state, controls, FIXED_TIMESTEP);
+      if (shouldFinish(state)) return state;
+    }
+    throw new Error(`${track} never reached shouldFinish within the safety cap`);
+  }
+
+  it("a normal sweep run finishes once sweptAngle reaches the track's own sweepAngle, well inside the safety cap", () => {
+    const track = TRACK_PRESETS["sweep-right"];
+    const finished = runToFinish("sweep-right");
+    expect(finished.sweptAngle).toBeGreaterThanOrEqual(track.sweepAngle);
+    // Confirms the position condition tripped shouldFinish, not the
+    // SAFETY_CAP_SECONDS backstop — a pathologically slow run is the only
+    // case that should ever reach the cap.
+    expect(finished.elapsed).toBeLessThan(SAFETY_CAP_SECONDS);
+  });
+
+  it("a hairpin run also finishes positionally, taking a larger swept angle and longer elapsed time than the sweep", () => {
+    const sweepTrack = TRACK_PRESETS["sweep-right"];
+    const hairpinTrack = TRACK_PRESETS["hairpin-right"];
+    const sweepFinished = runToFinish("sweep-right");
+    const hairpinFinished = runToFinish("hairpin-right");
+
+    expect(hairpinFinished.sweptAngle).toBeGreaterThanOrEqual(hairpinTrack.sweepAngle);
+    expect(hairpinTrack.sweepAngle).toBeGreaterThan(sweepTrack.sweepAngle);
+    expect(hairpinFinished.elapsed).toBeGreaterThan(sweepFinished.elapsed);
+    expect(hairpinFinished.elapsed).toBeLessThan(SAFETY_CAP_SECONDS);
+  });
+
+  it("the car's position at finish sits at the end of the track's own arc length (radius * sweepAngle), not partway through it", () => {
+    const track = TRACK_PRESETS["sweep-right"];
+    const finished = runToFinish("sweep-right");
+    const travelled = Math.hypot(finished.x, finished.y);
+    // Chord length between start (0,0) and a point swept by sweepAngle
+    // around a circle of this radius — a looser geometric cross-check than
+    // sweptAngle itself (which is the actual finish trigger), independent of
+    // the sweptAngleRate integration used to produce it.
+    const chordLength = 2 * track.radius * Math.sin(track.sweepAngle / 2);
+    expect(travelled).toBeGreaterThan(chordLength * 0.5);
   });
 });

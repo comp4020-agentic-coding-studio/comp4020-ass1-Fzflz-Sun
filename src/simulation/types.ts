@@ -8,9 +8,19 @@ export type DrivingState = "stable" | "understeer" | "oversteer" | "slide";
  * classification: "ready" is the inert state on load/Reset (stationary,
  * indefinitely, until the visitor explicitly starts a run); "running" is a
  * started run over which handling can be observed; "finished" is reached
- * once the run's fixed duration (`RUN_DURATION_SECONDS`) elapses, and holds
- * the settled final state until Run is pressed again. */
+ * once the car reaches the end of its selected track's swept arc (or, as a
+ * safety net, once `SAFETY_CAP_SECONDS` elapses — see `shouldFinish` in
+ * physics.ts), and holds the settled final state until Run is pressed
+ * again. */
 export type RunPhase = "ready" | "running" | "finished";
+
+/** Discrete track/corner preset, chosen before a run and held fixed for its
+ * whole duration — see `TRACK_PRESETS` (constants.ts). Sweep presets are a
+ * broad, gentle corner; hairpin presets are a tighter, longer-swept corner
+ * that demands more lateral force at the same speed — the second, free
+ * demonstration of the shared grip-budget idea (identical drivetrain/
+ * surface/throttle settings saturate sooner on a hairpin than on a sweep). */
+export type TrackId = "sweep-left" | "sweep-right" | "hairpin-left" | "hairpin-right";
 
 /** Discrete throttle-intensity setting, chosen before a run and held fixed
  * for its whole duration — see `THROTTLE_INTENSITY_PRESETS` (constants.ts). */
@@ -76,6 +86,16 @@ export interface SimState {
    * whole run, unaffected by `step()`. */
   throttleIntensity: ThrottleIntensityId;
   throttleTiming: ThrottleTimingId;
+  /** Which track/corner preset this run uses — see `TrackId`/`TRACK_PRESETS`. */
+  track: TrackId;
+  /** Accumulated signed swept angle (radians) around the track's centre of
+   * curvature since `startRun`, always increasing in magnitude in the
+   * direction the corner bends. Compared against the selected track's
+   * `sweepAngle` to decide when a run reaches `"finished"` — see
+   * `shouldFinish` in physics.ts. Distinct from `heading`/`pathOffset`: this
+   * tracks progress *around the corner*, not the car's own orientation or
+   * lateral error. */
+  sweptAngle: number;
   /** Simulated seconds since the last reset — never wall-clock time. */
   elapsed: number;
   /** See `RunPhase`. While "ready", `step` is a no-op: the car sits at rest
@@ -128,7 +148,42 @@ export interface CarParams {
 }
 
 export interface TrackParams {
-  /** Corner radius, metres. Positive; the corner always bends the same way
-   * (see track.ts for the sign convention). */
+  id: TrackId;
+  label: string;
+  /** Corner radius, metres. Always positive — `direction` says which way it
+   * bends (see track.ts for the sign convention). */
   radius: number;
+  /** Which way the corner bends. Left/right presets of the same sharpness
+   * are exact mirror images: the friction/physics model has no
+   * direction-dependent asymmetry, so mirroring is purely this sign flip on
+   * `trackCentre`/`referenceCurvature`/the autosteer target, never
+   * separately-tuned physics. */
+  direction: "left" | "right";
+  /** Total angle (radians) the track sweeps through from entry to the
+   * finish line — what makes the track a finite, deliberately completed
+   * segment rather than an open-ended arc. A run reaches `"finished"` once
+   * `SimState.sweptAngle` reaches this value (see `shouldFinish`,
+   * physics.ts). */
+  sweepAngle: number;
+  /** Fraction of `maxSteerAngle` the fixed autosteer program targets for
+   * this track — calibrated so the car's kinematic steer angle matches this
+   * track's own curvature at `ENTRY_SPEED`, the same
+   * `atan(wheelbase/radius)/maxSteerAngle` discipline used for the original
+   * single-track `DRY_BASELINE_STEERING_FRACTION` (see
+   * docs/model-assumptions.md). Signed by `direction` in `inputs.ts`, not
+   * here. */
+  autosteerFraction: number;
+  /** Documented estimate of how long a coasting (no-throttle) traversal of
+   * this track takes at roughly `ENTRY_SPEED` — for calibration reasoning
+   * only (docs/model-assumptions.md); the actual "finished" trigger is
+   * position-based (`sweptAngle` reaching `sweepAngle`), not this estimate. */
+  expectedTraversalSeconds: number;
+  /** Optional constant grade angle (radians, positive = uphill). When
+   * present, `step()` (physics.ts) adds a single
+   * `-mass * gravity * sin(gradeAngle)` term to the longitudinal force
+   * balance — uphill opposes engine force, downhill adds to it. Normal
+   * force and lateral grip capacity are left exactly as-is: this is
+   * deliberately the smallest possible slope model, not suspension or
+   * weight transfer (see CLAUDE.md). */
+  gradeAngle?: number;
 }

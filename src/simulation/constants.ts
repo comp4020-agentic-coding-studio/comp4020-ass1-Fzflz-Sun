@@ -5,6 +5,7 @@ import type {
   ThrottleIntensityPreset,
   ThrottleTimingId,
   ThrottleTimingPreset,
+  TrackId,
   TrackParams,
 } from "./types.ts";
 
@@ -32,18 +33,25 @@ export const CAR_PARAMS: CarParams = {
   corneringStiffnessFront: 80000, // N/rad, linear tyre model, symmetric front/rear by default
   corneringStiffnessRear: 80000,
   // rad (~4.3°) "full steering lock" in this teaching model. This is not a
-  // literal wheel angle: it is calibrated together with TRACK_PARAMS.radius,
-  // wheelbaseHalf and ENTRY_SPEED as one scenario, not a standalone tuning
-  // knob. A 2.6 m wheelbase following a 45 m-radius corner needs roughly
-  // atan(2.6/45) ≈ 0.058 rad of kinematic steer angle just to match the
-  // road's curvature; DRY_BASELINE_STEERING_FRACTION (physics.ts) of this
-  // value is calibrated to land close to that requirement, so the documented
-  // dry baseline (~70% steering) tracks the reference line, full lock tightens
-  // the line further, and there is still headroom below full lock before the
-  // front axle's lateral capacity is exhausted. The previous value (0.045 rad)
-  // was geometrically incapable of reaching the required curvature at any
-  // steering fraction — the corner would always be run wide regardless of
-  // input, which is exactly the bug this recalibration fixes.
+  // literal wheel angle: it is calibrated together with each TRACK_PRESETS
+  // entry's radius, wheelbaseHalf and ENTRY_SPEED as one scenario, not a
+  // standalone tuning knob — every track preset's own autosteerFraction is
+  // derived from this same fixed value via
+  // atan(wheelbase/radius)/maxSteerAngle (see TRACK_PRESETS below and
+  // docs/model-assumptions.md), left UNCHANGED across all four presets so
+  // none of the hand-built saturation fixtures in physics.test.ts (which
+  // apply steering as a raw fraction of this angle directly, without going
+  // through a track) shift underneath them. A 2.6 m wheelbase following the
+  // default 45 m-radius sweep needs roughly atan(2.6/45) ≈ 0.058 rad of
+  // kinematic steer angle just to match the road's curvature;
+  // DRY_BASELINE_STEERING_FRACTION of this value lands close to that
+  // requirement, so the documented dry baseline (~70% steering) tracks the
+  // reference line, full lock tightens the line further, and there is still
+  // headroom below full lock before the front axle's lateral capacity is
+  // exhausted. The previous value (0.045 rad) was geometrically incapable of
+  // reaching the required curvature at any steering fraction — the corner
+  // was always run wide regardless of input, which is exactly the bug this
+  // recalibration fixes.
   maxSteerAngle: 0.08,
   steerRampPerSecond: 2.5, // full lock reached in ~0.4s of held input
   throttleRampPerSecond: 1.2, // full throttle reached in ~0.83s of held input
@@ -57,8 +65,87 @@ export const CAR_PARAMS: CarParams = {
   maxSpeed: 40, // m/s safety cap, well above anything this corner needs
 };
 
-export const TRACK_PARAMS: TrackParams = {
-  radius: 45, // m — one broad, gentle corner
+// Fraction of maxSteerAngle that is this teaching model's "documented dry
+// baseline" cornering input — the default "sweep-right" track's
+// autosteerFraction below reproduces this exact value, and physics.test.ts's
+// hand-built ControlInputs fixtures (HARD_RIGHT_FULL_THROTTLE, STEER_ONLY)
+// still reference this constant directly, bypassing track calibration
+// entirely since they call step()/drive() without going through
+// controlsAtElapsed. Calibrated together with the default track's radius,
+// wheelbaseHalf and ENTRY_SPEED (see maxSteerAngle's comment above) to track
+// the reference line on a dry surface.
+export const DRY_BASELINE_STEERING_FRACTION = 0.7;
+
+// Default track when a run/test doesn't pick one explicitly — reproduces the
+// original single-track prototype's exact geometry and autosteer target
+// (radius 45m, DRY_BASELINE_STEERING_FRACTION), so nothing that predates the
+// track picker changes behaviour.
+export const DEFAULT_TRACK_ID: TrackId = "sweep-right";
+
+// Four discrete track/corner presets, same Record-of-documented-presets
+// discipline as SURFACE_PRESETS/THROTTLE_INTENSITY_PRESETS. Left/right of the
+// same sharpness are exact mirror images (only `direction` differs) — the
+// friction/physics model has no direction-dependent asymmetry, so mirroring
+// never needs separately-tuned physics (see track.ts).
+//
+// Each preset's `autosteerFraction` is calibrated the same way the original
+// single track's DRY_BASELINE_STEERING_FRACTION was: a 2.6m wheelbase
+// (2 * CAR_PARAMS.wheelbaseHalf) needs atan(wheelbase/radius) rad of
+// kinematic steer angle to match this track's own curvature, expressed as a
+// fraction of maxSteerAngle=0.08. maxSteerAngle itself is left unchanged
+// across every preset (see its comment above), so a tighter track is
+// expressed entirely as "more of the same fixed steering budget", not a
+// different steering ceiling per track.
+//
+// `sweepAngle` is what makes a track a finite, deliberately completed
+// segment (see shouldFinish, physics.ts) instead of the old unbounded arc —
+// sized, together with radius, so the documented ENTRY_SPEED brings the car
+// to the end of the arc in a legible few seconds (expectedTraversalSeconds
+// is the coasting estimate used for that sizing, not the finish trigger
+// itself).
+export const TRACK_PRESETS: Record<TrackId, TrackParams> = {
+  "sweep-right": {
+    id: "sweep-right",
+    label: "Sweep (right)",
+    radius: 45,
+    direction: "right",
+    sweepAngle: Math.PI / 2, // 90°
+    autosteerFraction: DRY_BASELINE_STEERING_FRACTION,
+    expectedTraversalSeconds: 5.9,
+  },
+  "sweep-left": {
+    id: "sweep-left",
+    label: "Sweep (left)",
+    radius: 45,
+    direction: "left",
+    sweepAngle: Math.PI / 2,
+    autosteerFraction: DRY_BASELINE_STEERING_FRACTION,
+    expectedTraversalSeconds: 5.9,
+  },
+  "hairpin-right": {
+    id: "hairpin-right",
+    label: "Hairpin (right)",
+    // Tighter than the sweep — atan(2.6/40) ≈ 0.0649 rad, i.e. ≈81% of
+    // maxSteerAngle just to hold this line, versus the sweep's ≈70%. At
+    // identical drivetrain/surface/throttle settings this leaves noticeably
+    // less front-axle headroom before saturation: v²/r lateral demand is
+    // ~12.5% higher than the sweep at the same speed, on top of a steering
+    // input that alone already uses more of the fixed steering budget.
+    radius: 40,
+    direction: "right",
+    sweepAngle: (5 * Math.PI) / 6, // 150° — reads as a tight, sustained U-turn
+    autosteerFraction: 0.81,
+    expectedTraversalSeconds: 8.7,
+  },
+  "hairpin-left": {
+    id: "hairpin-left",
+    label: "Hairpin (left)",
+    radius: 40,
+    direction: "left",
+    sweepAngle: (5 * Math.PI) / 6,
+    autosteerFraction: 0.81,
+    expectedTraversalSeconds: 8.7,
+  },
 };
 
 /** Illustrative relative grip presets. Real grip depends on tyre compound,
@@ -102,23 +189,17 @@ export const LOW_SPEED_FADE_SPEED = 1.0;
 // timestep, which is what the un-clamped version of this fix would do.
 export const AT_REST_SPEED = 0.05;
 
-// Fraction of maxSteerAngle that is this teaching model's "documented dry
-// baseline" corning input, and — since the redesign that replaced held
-// steering with a fixed autosteer program — the *only* steering input the
-// simulation ever produces (controlsAtElapsed, inputs.ts). It is calibrated
-// together with TRACK_PARAMS.radius, wheelbaseHalf and ENTRY_SPEED (see
-// maxSteerAngle's comment above) to track the reference line on a dry
-// surface: the same target every run, ramped in from 0 over
-// steerRampPerSecond, never held or adjusted by the visitor.
-export const DRY_BASELINE_STEERING_FRACTION = 0.7;
-
-// Seconds — the fixed duration of every run, from startRun to the "finished"
-// phase. Calibrated as one scenario together with ENTRY_SPEED, the throttle
-// timing thresholds below, and throttleRampPerSecond: long enough that a
-// "late" throttle onset still has clear runway (thresholdSeconds + ~0.83s
-// full-throttle ramp time) to show a saturation contrast against "early"
-// before the run ends, short enough to stay a legible, watchable playback.
-export const RUN_DURATION_SECONDS = 6;
+// Seconds — a generous backstop duration that force-finishes a run
+// regardless of position, so a pathological settings combination (e.g. a
+// stalled car on ice that never reaches the end of its track's swept arc)
+// can't leave a run stuck in "running" forever. This is a safety net, NOT
+// the primary finish trigger: `shouldFinish` (physics.ts) normally finishes
+// a run once `SimState.sweptAngle` reaches the selected track's
+// `sweepAngle` — see each TRACK_PRESETS entry's `expectedTraversalSeconds`
+// for the actual, much-shorter, expected wall-clock length of a run. Sized
+// comfortably above the slowest realistic traversal (hairpin,
+// ~8.7s expected) so it is never the thing a normal run hits.
+export const SAFETY_CAP_SECONDS = 20;
 
 // Discrete throttle-intensity choices, each a fixed fraction of
 // maxEngineForce the run ramps toward once its timing threshold is reached.
@@ -137,10 +218,11 @@ export const THROTTLE_INTENSITY_PRESETS: Record<ThrottleIntensityId, ThrottleInt
 // speed off a coasting car, so the same throttle intensity applied "early"
 // stacks on peak lateral demand and saturates sooner than the identical
 // intensity applied "late", once the car has coasted down and gained more
-// lateral headroom. Calibrated together with RUN_DURATION_SECONDS and
-// throttleRampPerSecond above: "late" still leaves ~1.5s of runway — more
-// than the ~0.83s full-throttle ramp — for the contrast to be visible before
-// the run ends.
+// lateral headroom. Calibrated together with every TRACK_PRESETS entry's
+// `expectedTraversalSeconds` and throttleRampPerSecond above: "late" still
+// leaves at least ~1.5s of runway — more than the ~0.83s full-throttle ramp
+// — before even the shortest track (the sweep, ~5.9s) finishes, so the
+// contrast is visible on every preset, not just the longer hairpin.
 export const THROTTLE_TIMING_PRESETS: Record<ThrottleTimingId, ThrottleTimingPreset> = {
   early: { id: "early", label: "Early", thresholdSeconds: 0 },
   mid: { id: "mid", label: "Mid", thresholdSeconds: 2.5 },

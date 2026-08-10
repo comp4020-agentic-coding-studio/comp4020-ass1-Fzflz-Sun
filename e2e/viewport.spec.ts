@@ -4,20 +4,25 @@ import { expect, test } from "@playwright/test";
 // spec/brief.md's "core interaction, stated testably" into real-browser
 // checks. Runs against the built site via playwright.config.ts's webServer.
 //
-// The interaction is now a discrete pre-run experiment, not real-time
-// driving: the visitor picks drivetrain/surface/throttle-intensity/
-// throttle-timing, presses Run, and watches a fixed-duration (6s)
-// deterministic playback settle into a "finished" state. Changing one
-// setting and pressing Run again — without a forced Reset in between — is
-// the whole comparison mechanic this file exercises.
+// The interaction is a discrete pre-run experiment, not real-time driving:
+// the visitor picks drivetrain/surface/throttle-intensity/throttle-timing/
+// track, presses Run, and watches a deterministic playback settle into a
+// "finished" state once the car reaches the end of its selected track's
+// finite swept arc (position-based, see shouldFinish in physics.ts) — not a
+// fixed wall-clock duration. Changing one setting and pressing Run again —
+// without a forced Reset in between — is the whole comparison mechanic this
+// file exercises.
 const VIEWPORTS = [
   { name: "desktop", width: 1920, height: 1080 },
   { name: "phone", width: 390, height: 844 },
 ] as const;
 
-// Must match src/simulation/constants.ts's RUN_DURATION_SECONDS.
-const RUN_DURATION_MS = 6000;
-const FINISH_TIMEOUT_MS = RUN_DURATION_MS + 3000;
+// Generous upper bound on how long any run can take before "Finished" — must
+// match src/simulation/constants.ts's SAFETY_CAP_SECONDS, the backstop that
+// bounds even a pathologically slow, non-saturating run. Real runs finish
+// well under this (the longest preset, hairpin, is a ~8.7s estimate).
+const SAFETY_CAP_MS = 20_000;
+const FINISH_TIMEOUT_MS = SAFETY_CAP_MS + 3000;
 
 async function readNumber(page: import("@playwright/test").Page, testid: string): Promise<number> {
   const text = await page.getByTestId(testid).textContent();
@@ -247,16 +252,19 @@ for (const viewport of VIEWPORTS) {
       await page.getByTestId("reset").click();
       await expect(page.getByTestId("drivetrain-fwd")).toBeEnabled();
       await expect(page.getByTestId("throttle-intensity-full")).toBeEnabled();
+      await expect(page.getByTestId("track-hairpin-right")).toBeEnabled();
 
       await page.getByTestId("start-run").click();
       await expect(page.getByTestId("drivetrain-fwd")).toBeDisabled();
       await expect(page.getByTestId("throttle-intensity-full")).toBeDisabled();
+      await expect(page.getByTestId("track-hairpin-right")).toBeDisabled();
 
       await expect(page.getByTestId("state-label")).toContainText("Finished", {
         timeout: FINISH_TIMEOUT_MS,
       });
       await expect(page.getByTestId("drivetrain-fwd")).toBeEnabled();
       await expect(page.getByTestId("throttle-intensity-full")).toBeEnabled();
+      await expect(page.getByTestId("track-hairpin-right")).toBeEnabled();
     });
 
     test("all setting pickers and run controls remain keyboard-focusable", async ({ page }) => {
@@ -276,10 +284,47 @@ for (const viewport of VIEWPORTS) {
         "throttle-timing-early",
         "throttle-timing-mid",
         "throttle-timing-late",
+        "track-sweep-left",
+        "track-sweep-right",
+        "track-hairpin-left",
+        "track-hairpin-right",
       ]) {
         await page.getByTestId(testid).focus();
         await expect(page.getByTestId(testid)).toBeFocused();
       }
+    });
+
+    test("selecting the hairpin track reaches saturation sooner than the sweep, same drivetrain/surface/throttle", async ({
+      page,
+    }) => {
+      test.setTimeout(MID_RUN_SAMPLE_MS * 2 + 8000);
+      await page.goto("/");
+      await page.getByTestId("throttle-intensity-full").click();
+      await page.getByTestId("throttle-timing-early").click();
+
+      await page.getByTestId("track-sweep-right").click();
+      await page.getByTestId("reset").click();
+      await page.getByTestId("start-run").click();
+      await page.waitForTimeout(MID_RUN_SAMPLE_MS);
+      const sweepUtil = Math.max(
+        await readNumber(page, "front-utilisation"),
+        await readNumber(page, "rear-utilisation"),
+      );
+      await page.getByTestId("reset").click();
+
+      await page.getByTestId("track-hairpin-right").click();
+      await page.getByTestId("reset").click();
+      await page.getByTestId("start-run").click();
+      await page.waitForTimeout(MID_RUN_SAMPLE_MS);
+      const hairpinUtil = Math.max(
+        await readNumber(page, "front-utilisation"),
+        await readNumber(page, "rear-utilisation"),
+      );
+
+      expect(
+        hairpinUtil,
+        "the tighter hairpin should use more of the shared grip budget than the sweep over the identical script",
+      ).toBeGreaterThan(sweepUtil);
     });
   });
 }

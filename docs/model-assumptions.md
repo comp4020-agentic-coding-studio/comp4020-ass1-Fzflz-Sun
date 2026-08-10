@@ -19,23 +19,28 @@ budget; drivetrain only changes which axle receives the throttle share.
 ## Tuned constants and why
 
 - **`maxSteerAngle = 0.08 rad` (~4.6°).** Not a literal wheel angle — it is
-  calibrated together with `TRACK_PARAMS.radius`, `wheelbaseHalf`, and
-  `ENTRY_SPEED` as one scenario, not a standalone tuning knob. A 2.6 m
-  wheelbase following this model's 45 m-radius corner needs roughly
-  `atan(2.6/45) ≈ 0.058 rad` of kinematic steer angle just to match the
-  road's own curvature; `DRY_BASELINE_STEERING_FRACTION` of this value lands
-  close to that requirement, so the documented dry baseline (~70% steering)
-  tracks the reference line, full lock tightens the line further, and there
-  is still headroom below full lock before the front axle's lateral capacity
-  is exhausted. The previous value (0.045 rad) was geometrically incapable of
-  reaching the required curvature at *any* steering fraction — the corner was
-  always run wide regardless of input, independent of and in addition to the
-  sign bug in "What went wrong first" below.
+  calibrated together with each `TRACK_PRESETS` entry's `radius`,
+  `wheelbaseHalf`, and `ENTRY_SPEED` as one scenario, not a standalone tuning
+  knob, and is left unchanged across every track preset so a tighter track is
+  expressed entirely as "more of the same fixed steering budget" (see the
+  track presets section below), not a different steering ceiling per track.
+  A 2.6 m wheelbase following the default sweep's 45 m-radius corner needs
+  roughly `atan(2.6/45) ≈ 0.058 rad` of kinematic steer angle just to match
+  the road's own curvature; `DRY_BASELINE_STEERING_FRACTION` of this value
+  lands close to that requirement, so the documented dry baseline (~70%
+  steering) tracks the reference line, full lock tightens the line further,
+  and there is still headroom below full lock before the front axle's
+  lateral capacity is exhausted. The previous value (0.045 rad) was
+  geometrically incapable of reaching the required curvature at *any*
+  steering fraction — the corner was always run wide regardless of input,
+  independent of and in addition to the sign bug in "What went wrong first"
+  below.
 - **`ENTRY_SPEED = 12 m/s` (~43 km/h).** The speed a run starts at once the
-  driver presses "Enter the corner" (`startRun`). Calibrated with the track
-  radius and `maxSteerAngle` above: fast enough that the corner is a real
-  driving problem, slow enough that the dry baseline's required lateral force
-  stays under each axle's friction-circle limit on its own.
+  driver presses "Enter the corner" (`startRun`). Calibrated with every
+  track's radius and `maxSteerAngle` above: fast enough that the corner is a
+  real driving problem, slow enough that the dry baseline's required lateral
+  force stays under each axle's friction-circle limit on its own, on every
+  track preset.
 - **`maxEngineForce = 4200 N`.** Tuned so full throttle alone, on dry
   surface, sits comfortably under one axle's limit (~71%). The pedagogical
   point is that *combining* throttle with cornering demand on the same axle
@@ -80,12 +85,48 @@ budget; drivetrain only changes which axle receives the throttle share.
 - **`SURFACE_PRESETS` (dry `μ=1.0`, wet `μ=0.7`, ice `μ=0.3`).** A relative,
   illustrative ordering — not measured coefficients for any real compound,
   temperature, or water/ice depth.
-- **`RUN_DURATION_SECONDS = 6`.** The fixed length of every run, from
-  `startRun` to the `"finished"` phase. Calibrated as one scenario together
-  with `ENTRY_SPEED` and the throttle-timing thresholds below: long enough
-  that even the "late" onset has clear runway (`thresholdSeconds` plus the
-  ~0.83s full-throttle ramp) to show a saturation contrast against "early"
-  before the run ends, short enough to stay a legible, watchable playback.
+- **`TRACK_PRESETS` — four discrete track/corner presets** (`sweep-left`,
+  `sweep-right`, `hairpin-left`, `hairpin-right`), the second, free
+  demonstration of the shared-budget idea: a smaller corner radius demands
+  more lateral force at the same speed, so it saturates sooner than a gentle
+  sweep under otherwise-identical drivetrain/surface/throttle settings — no
+  new physics, just a tighter circle to hold. Each preset is a calibrated
+  bundle, not independently tunable fields:
+  - `sweep-left`/`sweep-right`: `radius = 45 m`, `sweepAngle = π/2` (90°),
+    `autosteerFraction = DRY_BASELINE_STEERING_FRACTION = 0.7`,
+    `expectedTraversalSeconds ≈ 5.9`. Reproduces the original single-track
+    prototype's exact geometry (`sweep-right` is `DEFAULT_TRACK_ID`).
+  - `hairpin-left`/`hairpin-right`: `radius = 40 m`, `sweepAngle = 5π/6`
+    (150°, a tight, sustained U-turn), `autosteerFraction = 0.81`,
+    `expectedTraversalSeconds ≈ 8.7`. At the same speed this is a ~12.5%
+    higher `v²/r` lateral demand than the sweep, on top of a steering input
+    that alone already uses more (81% vs 70%) of the fixed steering budget —
+    together this reaches saturation at a lower throttle intensity, or
+    sooner in the run, than the identical settings do on a sweep.
+  - Each `autosteerFraction` is derived the same way
+    `DRY_BASELINE_STEERING_FRACTION` was: `atan(wheelbase / radius) /
+    maxSteerAngle`, with `wheelbase = 2 × CAR_PARAMS.wheelbaseHalf = 2.6 m`
+    and `maxSteerAngle` left unchanged across every preset.
+  - `"left"`/`"right"` of the same sharpness are exact mirror images — only
+    `direction` differs, produced by a single sign flip on `trackCentre` /
+    `referenceCurvature` / `sweptAngleRate` (`track.ts`) and on the signed
+    autosteer target (`inputs.ts`). The friction/tyre model has no
+    direction-dependent asymmetry, so mirroring never needed separately-tuned
+    physics.
+  - `sweepAngle` is what gives every track a finite, deliberately completed
+    length instead of the old unbounded arc: sized, together with `radius`
+    and `ENTRY_SPEED`, so the documented entry speed brings the car to the
+    end of the arc in a legible few seconds.
+    `expectedTraversalSeconds` is the coasting estimate used for that
+    *sizing*, not the finish trigger itself — see the lifecycle section
+    below for how `Finished` is actually reached.
+- **`SAFETY_CAP_SECONDS = 20`.** A generous backstop duration that
+  force-finishes a run regardless of position, so a pathological settings
+  combination (e.g. a stalled car on ice that never reaches the end of its
+  track) can't leave a run stuck `"running"` forever. This is a safety net,
+  *not* the primary finish trigger — see `shouldFinish` in the lifecycle
+  section below — sized comfortably above the slowest realistic traversal
+  (the hairpin, ~8.7s expected).
 - **`THROTTLE_INTENSITY_PRESETS` (light `0.4`, medium `0.7`, full `1.0`,
   each a fraction of `maxEngineForce`).** Same discipline as
   `SURFACE_PRESETS` — a documented teaching ordering, not a claim about a
@@ -101,42 +142,55 @@ budget; drivetrain only changes which axle receives the throttle share.
   lateral demand and saturates an axle sooner than the identical intensity
   applied "late". This falls directly out of the existing, untouched
   friction-circle model; it required no change to `physics.ts`. Calibrated
-  together with `RUN_DURATION_SECONDS` and `throttleRampPerSecond`: "late"
-  still leaves ~1.5s of runway — more than the ~0.83s full-throttle ramp —
-  for the contrast to be visible before the run ends.
+  together with every `TRACK_PRESETS` entry's `expectedTraversalSeconds` and
+  `throttleRampPerSecond`: "late" still leaves at least ~1.5s of runway —
+  more than the ~0.83s full-throttle ramp — before even the shortest track
+  (the sweep, ~5.9s) finishes, so the contrast is visible on every preset,
+  not just the longer hairpin.
 
 ## Experiment lifecycle
 
-The visitor never drives in real time. Before a run, they choose four
+The visitor never drives in real time. Before a run, they choose five
 discrete settings — drivetrain, surface, throttle intensity, throttle
-timing — each a `<button>` with a `data-testid`, never a held key or pointer
-control. Pressing the explicit `data-testid="start-run"` control (`startRun`)
-sets the car to `ENTRY_SPEED` and flips the phase from `"ready"` (or
-`"finished"`) to `"running"`; the car does not move on page load or after
-Reset, or ever between runs — `createInitialState` returns phase `"ready"`,
-and `step` is a no-op while `phase !== "running"`. This exists because an
-inert "ready" state and a moving "running" state look identical to a test
-that only checks utilisation percentages and state labels — see bug #5
-below.
+timing, and track — each a `<button>` with a `data-testid`, never a held key
+or pointer control. Pressing the explicit `data-testid="start-run"` control
+(`startRun`) sets the car to `ENTRY_SPEED` and flips the phase from `"ready"`
+(or `"finished"`) to `"running"`; the car does not move on page load or
+after Reset, or ever between runs — `createInitialState` returns phase
+`"ready"`, and `step` is a no-op while `phase !== "running"`. This exists
+because an inert "ready" state and a moving "running" state look identical
+to a test that only checks utilisation percentages and state labels — see
+bug #5 below.
 
 Once running, the car's whole control input — steering *and* throttle — is
 computed by `controlsAtElapsed(elapsed, throttleIntensity, throttleTiming,
-params)` (`inputs.ts`): a pure, closed-form function of elapsed run time,
-not an iterative accumulation of held-button state. Steering always ramps
-toward the same fixed autosteer target, `-DRY_BASELINE_STEERING_FRACTION`,
-at `steerRampPerSecond`, from the instant the run starts — it is never a
-second variable the visitor adjusts, so any behavioural difference between
-two runs is attributable to the settings that changed, not to how well the
-visitor steered. Throttle stays at exactly 0 until the selected timing
-threshold, then ramps toward the selected intensity fraction at
-`throttleRampPerSecond`. Brake is always 0 — braking is out of scope for
-this interaction model. Because both ramps are pure functions of elapsed
-time and the settings, the same (drivetrain, surface, intensity, timing)
-tuple reproduces bit-for-bit identical output on every run.
+params, track)` (`inputs.ts`): a pure, closed-form function of elapsed run
+time, not an iterative accumulation of held-button state. Steering always
+ramps toward the *selected track's own* fixed autosteer target
+(`track.autosteerFraction`, signed by `track.direction`) at
+`steerRampPerSecond`, from the instant the run starts — it is never a
+second variable the visitor adjusts directly (they only pick which track to
+autosteer around), so any behavioural difference between two runs is
+attributable to the settings that changed, not to how well the visitor
+steered. Throttle stays at exactly 0 until the selected timing threshold,
+then ramps toward the selected intensity fraction at `throttleRampPerSecond`.
+Brake is always 0 — braking is out of scope for this interaction model.
+Because both ramps are pure functions of elapsed time and the settings, the
+same (drivetrain, surface, intensity, timing, track) tuple reproduces
+bit-for-bit identical output on every run.
 
-When `elapsed` reaches `RUN_DURATION_SECONDS`, the phase flips to
-`"finished"` and the car holds its settled state — `step` no-ops exactly as
-it does in `"ready"`. The four setting pickers are disabled only while
+A run reaches `"finished"` **positionally**, not after a fixed duration:
+each step accumulates `SimState.sweptAngle` (via `sweptAngleRate`,
+`track.ts` — the signed rate the car's position vector is sweeping around
+the track's centre of curvature), and `shouldFinish` (`physics.ts`) flips
+the phase to `"finished"` once `sweptAngle` reaches the selected track's own
+`sweepAngle` — i.e. once the car has actually travelled the length of the
+track it's on, not just "some fixed number of seconds have passed
+regardless of what the car did". `SAFETY_CAP_SECONDS` is a backstop, not the
+primary trigger: it only fires if a pathological combination (e.g. a stalled
+car on ice) would otherwise never complete the arc. The car holds its
+settled state at `"finished"` — `step` no-ops exactly as it does in
+`"ready"`. The five setting pickers are disabled only while
 `phase === "running"`, and re-enable the instant it reaches `"finished"`, so
 a run in progress can't be given an inconsistent mix of two configurations.
 Pressing `data-testid="start-run"` again works identically from `"ready"` or

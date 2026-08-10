@@ -3,11 +3,12 @@ import {
   CAR_PARAMS,
   controlsAtElapsed,
   createInitialState,
+  DEFAULT_TRACK_ID,
   FIXED_TIMESTEP,
-  RUN_DURATION_SECONDS,
+  shouldFinish,
   startRun,
   step,
-  TRACK_PARAMS,
+  TRACK_PRESETS,
 } from "./src/simulation/index.ts";
 import type {
   DrivetrainId,
@@ -15,6 +16,7 @@ import type {
   SurfaceId,
   ThrottleIntensityId,
   ThrottleTimingId,
+  TrackId,
 } from "./src/simulation/index.ts";
 import { createInstruments } from "./src/ui/instruments.ts";
 
@@ -47,16 +49,24 @@ const throttleTimingButtons: Array<[ThrottleTimingId, HTMLButtonElement]> = [
   ["mid", required('[data-testid="throttle-timing-mid"]')],
   ["late", required('[data-testid="throttle-timing-late"]')],
 ];
+const trackButtons: Array<[TrackId, HTMLButtonElement]> = [
+  ["sweep-left", required('[data-testid="track-sweep-left"]')],
+  ["sweep-right", required('[data-testid="track-sweep-right"]')],
+  ["hairpin-left", required('[data-testid="track-hairpin-left"]')],
+  ["hairpin-right", required('[data-testid="track-hairpin-right"]')],
+];
 
 let currentDrivetrain: DrivetrainId = "RWD";
 let currentSurface: SurfaceId = "dry";
 let currentThrottleIntensity: ThrottleIntensityId = "medium";
 let currentThrottleTiming: ThrottleTimingId = "early";
+let currentTrack: TrackId = DEFAULT_TRACK_ID;
 let simState: SimState = createInitialState(
   currentDrivetrain,
   currentSurface,
   currentThrottleIntensity,
   currentThrottleTiming,
+  currentTrack,
 );
 
 function selectOption<T extends string>(
@@ -79,6 +89,7 @@ function updateSettingButtonsDisabled(): void {
     ...surfaceButtons,
     ...throttleIntensityButtons,
     ...throttleTimingButtons,
+    ...trackButtons,
   ]) {
     el.disabled = disabled;
   }
@@ -89,7 +100,7 @@ const instruments = createInstruments();
 const canvas = required<HTMLCanvasElement>('[data-testid="scene-canvas"]');
 let scene: ReturnType<typeof createGripScene> | null = null;
 try {
-  scene = createGripScene(canvas, TRACK_PARAMS);
+  scene = createGripScene(canvas);
 } catch (error) {
   // A canvas-less browser still gets the full instrument-panel explanation
   // (CLAUDE.md) — the 2D view is a bonus, not the source of truth.
@@ -144,6 +155,14 @@ for (const [id, el] of throttleTimingButtons) {
     renderImmediately();
   });
 }
+for (const [id, el] of trackButtons) {
+  el.addEventListener("click", () => {
+    currentTrack = id;
+    simState = { ...simState, track: id };
+    selectOption(trackButtons, id, () => {});
+    renderImmediately();
+  });
+}
 
 startButton.addEventListener("click", () => {
   // Safe from "ready" or "finished" alike — no forced Reset in between.
@@ -153,7 +172,13 @@ startButton.addEventListener("click", () => {
 });
 
 resetButton.addEventListener("click", () => {
-  simState = createInitialState(currentDrivetrain, currentSurface, currentThrottleIntensity, currentThrottleTiming);
+  simState = createInitialState(
+    currentDrivetrain,
+    currentSurface,
+    currentThrottleIntensity,
+    currentThrottleTiming,
+    currentTrack,
+  );
   accumulator = 0;
   renderImmediately();
 });
@@ -177,9 +202,10 @@ function frame(time: number): void {
       simState.throttleIntensity,
       simState.throttleTiming,
       CAR_PARAMS,
+      TRACK_PRESETS[simState.track],
     );
     simState = step(simState, controls, FIXED_TIMESTEP);
-    if (simState.phase === "running" && simState.elapsed >= RUN_DURATION_SECONDS) {
+    if (simState.phase === "running" && shouldFinish(simState)) {
       simState = { ...simState, phase: "finished" };
     }
     accumulator -= FIXED_TIMESTEP;

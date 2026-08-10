@@ -23,34 +23,41 @@ untouched, either the job was tiny or nobody read it.
   acceleration, and braking all draw on that same budget — not on separate
   supplies of force — so the axle that runs out first, not the drivetrain
   label, decides how the car leaves the intended line.
-- **The mechanic**: one car, one broad, fixed corner, driven by a single
-  deterministic autosteer + throttle script the visitor configures *before*
-  it runs, not by real-time driving input. Steering is always the same fixed
-  autosteer program (so it is never a second variable to control for); the
-  visitor's only inputs are four discrete pre-run settings — drivetrain
-  (FWD/RWD/AWD), surface (dry/wet/ice), throttle intensity (Light/Medium/
-  Full), and throttle timing (Early/Mid/Late, i.e. how soon into the run
-  throttle starts ramping in) — plus one `data-testid="start-run"` button.
-  Steering and throttle demand are combined per axle through a
-  friction-circle limit
+- **The mechanic**: one car, one of four selectable fixed corners, driven by a
+  single deterministic autosteer + throttle script the visitor configures
+  *before* it runs, not by real-time driving input. Steering is always the
+  same fixed autosteer program calibrated to whichever corner is selected (so
+  it is never a second variable to control for); the visitor's only inputs
+  are five discrete pre-run settings — drivetrain (FWD/RWD/AWD), surface
+  (dry/wet/ice), throttle intensity (Light/Medium/Full), throttle timing
+  (Early/Mid/Late, i.e. how soon into the run throttle starts ramping in),
+  and track (Sweep left/right, Hairpin left/right) — plus one
+  `data-testid="start-run"` button. Steering and throttle demand are combined
+  per axle through a friction-circle limit
   (`utilisation = sqrt((Fx/FxLimit)^2 + (Fy/FyLimit)^2)`), and the drivetrain
   choice only changes *which axle* carries the longitudinal share. When
   utilisation on an axle exceeds 1, that axle's achievable force clamps, and
   the car visibly runs wide (front saturates) or rotates (rear saturates).
-  Throttle timing is the piece that makes the shared-budget idea legible
+  Throttle timing is one piece that makes the shared-budget idea legible
   without any real-time skill: lateral demand from cornering is highest right
   after corner entry and eases as the car coasts, so applying the same
   throttle intensity *early* stacks on that peak lateral demand and saturates
   an axle sooner than applying it *late* — a controlled comparison a visitor
   makes by changing one setting and pressing Run again, exactly like the
-  course's Elevators/trolley-problem examples.
+  course's Elevators/trolley-problem examples. Track choice is a second,
+  independent demonstration of the same idea: a tighter corner (the hairpin)
+  demands more lateral force at the same speed than a gentle sweep, so it
+  saturates an axle sooner under otherwise-identical settings — no new
+  physics, just a smaller radius to hold. Left/right of the same sharpness
+  are exact mirror images (same corner, opposite hand), reusing the model's
+  existing left/right symmetry rather than any separately-tuned physics.
 - **The core interaction, stated testably**: the car sits at rest
   indefinitely on load or after `data-testid="reset"` — nothing moves until
-  the visitor presses `data-testid="start-run"`, which enters the corner at a
-  documented entry speed and plays back a fixed-duration (`RUN_DURATION_SECONDS`),
-  fully deterministic run using whatever `data-testid="drivetrain-*"`,
-  `data-testid="surface-*"`, `data-testid="throttle-intensity-*"`, and
-  `data-testid="throttle-timing-*"` are currently selected. Over that run,
+  the visitor presses `data-testid="start-run"`, which enters the selected
+  corner at a documented entry speed and plays back a fully deterministic run
+  using whatever `data-testid="drivetrain-*"`, `data-testid="surface-*"`,
+  `data-testid="throttle-intensity-*"`, `data-testid="throttle-timing-*"`,
+  and `data-testid="track-*"` are currently selected. Over that run,
   `data-testid="front-utilisation"` and/or `data-testid="rear-utilisation"`
   rise in the instrument panel, and `data-testid="speed"` and
   `data-testid="path-offset"` show the car actually moving and departing from
@@ -58,34 +65,46 @@ untouched, either the job was tiny or nobody read it.
   demand exceeds 100% on an axle, `data-testid="state-label"`'s text changes
   from `Stable` to `Understeer`, `Oversteer`, or `Four-wheel slide`, and
   `data-testid="state-explanation"` updates to name the saturated axle in
-  plain language. The run ends in an explicit `Finished` phase that holds the
-  car's settled final state; pressing `data-testid="start-run"` again from
+  plain language. Every track has an explicit, finite length (a swept arc
+  angle, not an open-ended corner), calibrated so the documented entry speed
+  brings the car to the *end* of that arc at or near `Finished` — the run
+  ends positionally, once the car has actually travelled the selected
+  track's length (`shouldFinish`, backed by a generous safety-cap duration so
+  a pathological settings combination can't run forever), holding the car's
+  settled final state. Pressing `data-testid="start-run"` again from
   `Finished` — with no forced Reset in between — starts a fresh, independent
   run from the current settings, which is how a visitor compares one setting
-  change against the last run. The four setting pickers are disabled only
+  change against the last run. The five setting pickers are disabled only
   while a run is actually in progress, and re-enabled the moment it reaches
   `Finished`. Switching `data-testid="drivetrain-*"` changes which axle
   reaches saturation first for an identical script; switching
   `data-testid="surface-*"` changes how much throttle it takes to reach
   saturation at all; switching `data-testid="throttle-timing-*"` with every
   other setting held fixed changes *when* (or whether) saturation happens
-  within the run. The fixed autosteer target (a dry-baseline fraction of full
-  lock — see `DRY_BASELINE_STEERING_FRACTION` in `docs/model-assumptions.md`)
-  is calibrated to track the corner's reference line on a dry surface from
-  the documented entry speed.
+  within the run; switching `data-testid="track-*"` to a tighter corner
+  (hairpin vs. sweep) with every other setting held fixed reaches saturation
+  at a lower throttle intensity, or earlier in the run, because the tighter
+  corner alone demands more lateral force at the same speed. The fixed
+  autosteer target for each track (calibrated from that track's own radius —
+  see `TRACK_PRESETS` in `docs/model-assumptions.md`) is calibrated to track
+  that corner's reference line on a dry surface from the documented entry
+  speed.
 - **Audience**: someone with everyday car-passenger intuition (turning,
   speeding up, braking are all familiar) but no vehicle-dynamics background.
   They do not need to know what a friction circle, slip angle, or bicycle
   model is — the explainer teaches the one idea (shared grip budget) through
   driving, not through the underlying maths, and says plainly that it is a
   simplified teaching model, not professional driving instruction.
-- **Explicitly excluded**: multiple tracks or corners; lap timing; other
-  traffic or collisions; cockpit view; gear/clutch simulation; ABS/ESC/TC;
-  tyre temperature/wear; suspension, differential, or aero tuning; detailed
-  dynamic weight transfer (front/rear normal load is fixed and symmetric);
-  real vehicle makes or performance claims; downloaded 3D models; a
-  long-form tutorial. Full exclusion list and rationale in the top-level
-  assignment brief this file narrows.
+- **Explicitly excluded**: a run-history or compare-across-runs UI; lap
+  timing; other traffic or collisions; cockpit view; gear/clutch simulation;
+  ABS/ESC/TC; tyre temperature/wear; suspension, differential, or aero
+  tuning; detailed dynamic weight transfer (front/rear normal load is fixed
+  and symmetric); real vehicle makes or performance claims; downloaded 3D
+  models; a long-form tutorial. (Multiple tracks/corners is *not* excluded —
+  four fixed presets exist, chosen from a picker before a run, same as the
+  other settings; there is no free-form track editor or arbitrary corner
+  geometry.) Full exclusion list and rationale in the top-level assignment
+  brief this file narrows.
 - **Edge cases that matter**: keyboard-only operation (Tab between setting
   pickers and the Run/Reset buttons, Enter/Space to activate them — there is
   no continuous arrow-key driving to support anymore); touch targets sized
@@ -161,6 +180,8 @@ the crit:
   good, only that it does what you said it does.
 - #6's commit history actually growing with the work, not reconstructed after
   the fact.
-- Whether the 3D chase view and instrument panel actually make saturation
-  *legible* — camera behaviour, colour, and motion are judged live in a
-  browser at both viewports, not by a green test suite.
+- Whether the 2D bird's-eye scene and instrument panel actually make
+  saturation *legible* — camera behaviour (it rotates to track velocity
+  heading so a saturated axle's slip visibly shows against a stable frame),
+  colour, and motion are judged live in a browser at both viewports, not by
+  a green test suite.

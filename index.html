@@ -188,6 +188,47 @@
                 </button>
               </div>
             </fieldset>
+            <fieldset>
+              <legend>Track</legend>
+              <div class="option-group" role="group" aria-label="Track">
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="track-sweep-left"
+                  data-track="sweep-left"
+                  aria-pressed="false"
+                >
+                  Sweep left
+                </button>
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="track-sweep-right"
+                  data-track="sweep-right"
+                  aria-pressed="true"
+                >
+                  Sweep right
+                </button>
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="track-hairpin-left"
+                  data-track="hairpin-left"
+                  aria-pressed="false"
+                >
+                  Hairpin left
+                </button>
+                <button
+                  type="button"
+                  class="option-button"
+                  data-testid="track-hairpin-right"
+                  data-track="hairpin-right"
+                  aria-pressed="false"
+                >
+                  Hairpin right
+                </button>
+              </div>
+            </fieldset>
           </section>
 
           <details class="panel" data-testid="model-assumptions">
@@ -201,10 +242,15 @@
               oversteer, and AWD can still slide if pushed hard enough. Dry/wet/ice are a
               relative, illustrative grip ordering, not measured coefficients for any real
               tyre or surface. There is no real-time driving input by design: steering is a
-              fixed autosteer program (the same every run, so it isn't a second variable
-              alongside drivetrain/surface), and throttle intensity/timing are the two
-              settings you choose before pressing Run. Pick a combination, run it, then
-              change one setting and run again to compare — that comparison is the whole
+              fixed autosteer program calibrated to whichever track you pick (the same
+              every run for that track, so it isn't a second variable alongside
+              drivetrain/surface), and throttle intensity/timing/track are the settings
+              you choose before pressing Run. A tighter hairpin demands more lateral
+              force at the same speed than a gentle sweep, so it saturates sooner under
+              otherwise-identical settings — a second, free demonstration of the same
+              shared budget. Every track has a finite, calibrated length; a run finishes
+              when the car reaches the end of it. Pick a combination, run it, then change
+              one setting and run again to compare — that comparison is the whole
               interaction. Full assumptions and tuned constants are documented in this
               project's <code>docs/model-assumptions.md</code>.
             </p>

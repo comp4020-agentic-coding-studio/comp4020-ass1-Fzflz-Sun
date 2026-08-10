@@ -41,6 +41,10 @@ describe("core interaction (assignment-1 spec #4): grip-budget markup contract",
     required("throttle-timing-early", "the early throttle timing must be selectable");
     required("throttle-timing-mid", "the mid throttle timing must be selectable");
     required("throttle-timing-late", "the late throttle timing must be selectable");
+    required("track-sweep-left", "the gentle left sweep must be selectable");
+    required("track-sweep-right", "the gentle right sweep must be selectable");
+    required("track-hairpin-left", "the tight left hairpin must be selectable");
+    required("track-hairpin-right", "the tight right hairpin must be selectable");
   });
 
   describe("semantic state (the target side of the interaction, and non-visual truth)", () => {
@@ -75,6 +79,10 @@ describe("core interaction (assignment-1 spec #4): grip-budget markup contract",
       "throttle-timing-early",
       "throttle-timing-mid",
       "throttle-timing-late",
+      "track-sweep-left",
+      "track-sweep-right",
+      "track-hairpin-left",
+      "track-hairpin-right",
     ];
     for (const testid of testids) {
       const el = doc.querySelector(`[data-testid="${testid}"]`);

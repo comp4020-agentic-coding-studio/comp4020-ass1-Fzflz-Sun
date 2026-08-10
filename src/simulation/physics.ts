@@ -1,13 +1,15 @@
 import {
   AT_REST_SPEED,
   CAR_PARAMS,
+  DEFAULT_TRACK_ID,
   ENTRY_SPEED,
   LOW_SPEED_FADE_SPEED,
   ROLLING_RESISTANCE_FORCE,
+  SAFETY_CAP_SECONDS,
   SURFACE_PRESETS,
-  TRACK_PARAMS,
+  TRACK_PRESETS,
 } from "./constants.ts";
-import { pathOffset } from "./track.ts";
+import { pathOffset, sweptAngleRate } from "./track.ts";
 import type {
   AxleState,
   CarParams,
@@ -18,7 +20,7 @@ import type {
   SurfaceId,
   ThrottleIntensityId,
   ThrottleTimingId,
-  TrackParams,
+  TrackId,
 } from "./types.ts";
 
 // The core teaching model: a 3-DOF bicycle model (Fx_f, Fx_r, Fy_f, Fy_r) with
@@ -72,6 +74,7 @@ export function createInitialState(
   surface: SurfaceId = "dry",
   throttleIntensity: ThrottleIntensityId = "medium",
   throttleTiming: ThrottleTimingId = "early",
+  track: TrackId = DEFAULT_TRACK_ID,
 ): SimState {
   const zeroAxle: AxleState = {
     fxDemand: 0,
@@ -102,6 +105,8 @@ export function createInitialState(
     surface,
     throttleIntensity,
     throttleTiming,
+    track,
+    sweptAngle: 0,
     elapsed: 0,
     phase: "ready",
   };
@@ -117,7 +122,13 @@ export function createInitialState(
  * step in between. */
 export function startRun(state: SimState): SimState {
   return {
-    ...createInitialState(state.drivetrain, state.surface, state.throttleIntensity, state.throttleTiming),
+    ...createInitialState(
+      state.drivetrain,
+      state.surface,
+      state.throttleIntensity,
+      state.throttleTiming,
+      state.track,
+    ),
     phase: "running",
     vx: ENTRY_SPEED,
   };
@@ -131,12 +142,16 @@ export function step(
   controls: ControlInputs,
   dt: number,
   params: CarParams = CAR_PARAMS,
-  track: TrackParams = TRACK_PARAMS,
 ): SimState {
   // The experiment's inert phase: nothing moves until the driver explicitly
   // starts a run (startRun above), so page load and Reset both leave the car
   // stationary indefinitely rather than launching it on their own.
   if (state.phase !== "running") return state;
+
+  // Looked up from state.track rather than taken as a parameter — same
+  // pattern as SURFACE_PRESETS[state.surface] below — so every caller
+  // automatically drives the track the visitor actually picked.
+  const track = TRACK_PRESETS[state.track] ?? TRACK_PRESETS[DEFAULT_TRACK_ID];
 
   const delta = controls.steering * params.maxSteerAngle;
   const vxSafe = Math.max(state.vx, params.minSpeedForSlip);
@@ -242,8 +257,17 @@ export function step(
 
   const heading = state.heading + yawRate * dt;
 
-  const x = state.x + (vx * Math.cos(heading) - vy * Math.sin(heading)) * dt;
-  const y = state.y + (vx * Math.sin(heading) + vy * Math.cos(heading)) * dt;
+  const vxWorld = vx * Math.cos(heading) - vy * Math.sin(heading);
+  const vyWorld = vx * Math.sin(heading) + vy * Math.cos(heading);
+  const x = state.x + vxWorld * dt;
+  const y = state.y + vyWorld * dt;
+
+  // Progress around this track's own corner (see sweptAngleRate, track.ts),
+  // integrated from the car's pre-step position — used by shouldFinish below
+  // to decide when the run has reached the end of its track's swept arc,
+  // rather than an open-ended geometry the car could coast through forever.
+  const sweptAngle =
+    state.sweptAngle + sweptAngleRate(state.x, state.y, vxWorld, vyWorld, track) * dt;
 
   return {
     ...state,
@@ -262,6 +286,22 @@ export function step(
     lateralG: fyTotal / params.mass / params.gravity,
     pathOffset: pathOffset(x, y, track),
     drivingState: classify(front, rear),
+    sweptAngle,
     elapsed: state.elapsed + dt,
   };
+}
+
+/** Whether a "running" state should transition to "finished" — checked by
+ * the caller's frame loop (main.ts) after each step, never inside step()
+ * itself (step() only ever advances physics; lifecycle transitions stay the
+ * caller's responsibility, same as the "running" phase gate above).
+ * Position-based: normally true once the car's accumulated `sweptAngle`
+ * reaches the selected track's `sweepAngle` — i.e. it has reached the end of
+ * the track's geometry, not merely driven for a fixed duration. The
+ * `elapsed >= SAFETY_CAP_SECONDS` half is a backstop only: it exists so a
+ * pathological settings combination (e.g. stalling on ice) can't leave a run
+ * stuck in "running" forever, not as the normal way a run ends. */
+export function shouldFinish(state: SimState): boolean {
+  const track = TRACK_PRESETS[state.track] ?? TRACK_PRESETS[DEFAULT_TRACK_ID];
+  return state.sweptAngle >= track.sweepAngle || state.elapsed >= SAFETY_CAP_SECONDS;
 }
