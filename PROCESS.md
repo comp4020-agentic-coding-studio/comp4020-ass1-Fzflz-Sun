@@ -174,4 +174,4 @@ saturating run by hand on both a left- and right-direction track before
 accepting it — the automated checks were green through both of the previous,
 insufficient rounds too, so only looking at it settled anything.
 
-[`COMMIT_D_SHA`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-Fzflz-Sun/commit/COMMIT_D_SHA)
+[`266590e`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-Fzflz-Sun/commit/266590e5c9327156bfe54ecaef4ede198df739d6)
