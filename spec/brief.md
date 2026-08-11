@@ -180,8 +180,9 @@ the crit:
   good, only that it does what you said it does.
 - #6's commit history actually growing with the work, not reconstructed after
   the fact.
-- Whether the 2D bird's-eye scene and instrument panel actually make
-  saturation *legible* — camera behaviour (it rotates to track velocity
-  heading so a saturated axle's slip visibly shows against a stable frame),
+- Whether the 3D rear-chase scene and instrument panel actually make
+  saturation *legible* — the camera holds a stable, travel-heading-aligned
+  frame behind the car (never yawing to the body itself) so a saturated
+  axle's slip shows as the chassis visibly diverging from that frame,
   colour, and motion are judged live in a browser at both viewports, not by
   a green test suite.

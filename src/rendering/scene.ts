@@ -1,67 +1,44 @@
-import { CAR_PARAMS, DEFAULT_TRACK_ID, TRACK_PRESETS } from "../simulation/constants.ts";
-import type { SimState, TrackParams } from "../simulation/index.ts";
-import { trackCentre } from "../simulation/track.ts";
+import * as THREE from "three";
+import { DEFAULT_TRACK_ID, TRACK_PRESETS } from "../simulation/constants.ts";
+import type { SimState, TrackId } from "../simulation/index.ts";
 import {
+  approach,
   CAMERA_ZOOM_SETTLE_TIME_CONSTANT_SECONDS,
   type CameraPose,
-  RUN_START_ZOOM_FACTOR,
-  approach,
   nextCameraPose,
+  RUN_START_ZOOM_FACTOR,
 } from "./camera.ts";
-import { drawCar, FRONT_COLOR, REAR_COLOR, wheelColor } from "./car.ts";
-import { type Camera, horizonScreenY, project, type ProjectedPoint, type Viewport } from "./projection.ts";
+import { simToWorld } from "./coordinates.ts";
+import { buildScenery, buildStaticEnvironment, FOG_FAR_METERS, FOG_NEAR_METERS } from "./environment.ts";
+import { FRONT_COLOR, REAR_COLOR, SKY_HORIZON_COLOR, wheelColor } from "./materials.ts";
+import { buildTrackGeometry } from "./track-geometry.ts";
+import { axleWorldPoints, loadVehicle, type Vehicle } from "./vehicle.ts";
 
 // This chase-camera scenario is calibrated as one set of numbers, the same
 // discipline CLAUDE.md requires for `maxSteerAngle`/`TRACK_PRESETS`: change
 // one of these and the framing/legibility claims below may no longer hold.
-//
-// CAMERA_HEIGHT_METERS/CAMERA_PITCH_RADIANS/CHASE_DISTANCE_METERS together
-// fix the vantage: a camera mounted above and just behind the car, angled
-// down at it — high and close enough that the car reads clearly, low and far
-// enough back that the road ahead still dominates the frame rather than the
-// car filling it. FOCAL_LENGTH_TO_VIEWPORT_HEIGHT_RATIO is expressed as a
-// ratio of the *viewport's* height, not a raw pixel count, so the field of
-// view (and therefore the framing) stays the same across the 1920x1080 and
-// 390x844 marking viewports instead of one of them ending up a fisheye or a
-// pinhole. With these numbers, `horizonScreenY` (projection.ts) lands at
-// roughly 24% down from the top — mostly road/ground, a strip of sky above.
+// CAMERA_HEIGHT_METERS/CAMERA_PITCH_RADIANS/CHASE_DISTANCE_METERS fix the
+// vantage — a camera mounted above and just behind the car, angled down at
+// it. CAMERA_VERTICAL_FOV_DEGREES is derived from the previous 2D renderer's
+// FOCAL_LENGTH_TO_VIEWPORT_HEIGHT_RATIO (1.15): a pinhole camera's focal
+// length f and vertical FOV are related by tan(fov/2) = viewportHeight /
+// (2f); expressing the ratio as viewportHeight/f = 1/1.15 gives fov =
+// 2*atan(1/(2*1.15)) directly, so `PerspectiveCamera.fov` (Three.js's own
+// vertical-FOV-in-degrees convention, aspect-independent) reproduces the same
+// framing the old renderer tuned, without needing a viewport-height-relative
+// focal length at all — Three.js's projection matrix already handles that.
 const CAMERA_HEIGHT_METERS = 2.2;
 const CAMERA_PITCH_RADIANS = 0.22;
 const CHASE_DISTANCE_METERS = 6;
 const FOCAL_LENGTH_TO_VIEWPORT_HEIGHT_RATIO = 1.15;
-
-// Metres. Bounded draw distance: how far ahead of the camera the road is
-// sampled and drawn, plus a small margin behind it so the road doesn't pop
-// into existence right at the camera's own position. Calibrated together
-// with TRACK_PRESETS (constants.ts): both hairpin presets sweep further than
-// this at once, so — exactly like the previous (orthographic) chase-camera
-// pass's zoom, and for the same reason — the corner's far side is never all
-// visible in a single frame. That is intentional, matching a real chase
-// camera; don't "fix" it by raising this until the whole corner fits.
-const ROAD_DRAW_DISTANCE_METERS = 70;
-const ROAD_BEHIND_MARGIN_METERS = 10;
-// Metres per sample/band along the arc. Also sets the banding/dash period
-// used as the road's only motion cue (see `drawRoad`) — anchored to a
-// world-fixed grid from the track's own start, not to the sliding draw
-// window, so the same physical stretch of road is always the same band
-// colour from one frame to the next and the pattern reads as scrolling
-// toward the camera rather than flickering.
-const ROAD_SAMPLE_STEP_METERS = 4;
-const ROAD_HALF_WIDTH = 7; // m, matches the old orthographic scene's road width
-const KERB_WIDTH_METERS = 1.2;
+const CAMERA_VERTICAL_FOV_RADIANS = 2 * Math.atan(1 / (2 * FOCAL_LENGTH_TO_VIEWPORT_HEIGHT_RATIO));
+const CAMERA_NEAR_METERS = 0.1;
+const CAMERA_FAR_METERS = FOG_FAR_METERS + 40; // a little past where fog has already fully hidden everything
 
 const MAX_DEVICE_PIXEL_RATIO = 2;
 const TRAIL_MAX_POINTS = 40;
 const TRAIL_DOT_RADIUS_METERS = 0.16;
-
-const SKY_COLOR = "#12151a";
-const GROUND_COLOR = "#20241f"; // off-road grass, distinct from the road surface
-const ROAD_COLOR = "#2c3038";
-const ROAD_COLOR_ALT = "#333844";
-const KERB_COLOR_A = "#c94f3f";
-const KERB_COLOR_B = "#dfdccf";
-const REFERENCE_LINE_COLOR = "#dfdccf";
-const FINISH_MARKER_COLOR = "#f2efe8";
+const TRAIL_LIFT_METERS = 0.05;
 
 export interface GripScene {
   update(state: SimState, reducedMotion: boolean): void;
@@ -71,71 +48,129 @@ export interface GripScene {
 
 interface TrailPoint {
   x: number;
-  y: number;
-  color: string;
+  z: number;
+  color: THREE.Color;
 }
 
-interface WorldPoint {
-  x: number;
-  y: number;
+interface TrailSlot {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
 }
 
-/** The car's starting angle (relative to a track's centre of curvature) and
- * the angle it sweeps toward as the run progresses — see `sweptAngleRate`
- * (track.ts), worked out geometrically here so the road can be sampled as a
- * trimmed, finite arc instead of a full circle. Every track starts the car
- * at world (0, 0) heading +x, so a "right" track's centre sits below the
- * start point (angle +pi/2 from the start point) and a "left" track's centre
- * sits above it (angle -pi/2); sweeping toward the track's own `sweepAngle`
- * moves that angle clockwise for "right" and counterclockwise for "left" —
- * mirrored, per track.ts's direction convention. */
-function arcAngles(track: TrackParams): { start: number; end: number } {
-  const start = track.direction === "left" ? -Math.PI / 2 : Math.PI / 2;
-  const end = track.direction === "left" ? start + track.sweepAngle : start - track.sweepAngle;
-  return { start, end };
+/** Removes every child from `group` and disposes only the geometries this
+ * module itself procedurally created for track/scenery groups — never the
+ * shared, `asset-loader.ts`-cached glTF geometries a scattered prop or the
+ * vehicle references, since those are shared by reference across every
+ * clone and other live scenes/instances may still need them. Materials,
+ * unlike geometry, are already per-clone (`asset-loader.ts` clones the
+ * object graph but not materials; `vehicle.ts`'s wheel materials are
+ * explicitly re-cloned on top of that) so they're always safe to dispose
+ * here. */
+function disposeGroup(group: THREE.Group, disposeGeometries: boolean): void {
+  group.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    if (disposeGeometries) node.geometry.dispose();
+    const materials = Array.isArray(node.material) ? node.material : [node.material];
+    for (const material of materials) material.dispose();
+  });
+  group.clear();
 }
 
-function pointOnArc(centre: WorldPoint, radius: number, angle: number): WorldPoint {
-  return { x: centre.x + radius * Math.cos(angle), y: centre.y + radius * Math.sin(angle) };
-}
-
-/** Builds the pseudo-3D chase-camera scene: a hand-rolled perspective
- * projection over the flat ground plane (the classic Out Run/Pole Position
- * technique — see `projection.ts`), not an orthographic top-down transform.
- * Two earlier passes (rotate the camera to travel heading, then anchor it
- * low and zoom in) tuned an orthographic `ctx.translate -> ctx.scale ->
- * ctx.rotate` transform and still read as a radar/map view — that was not a
- * tuning failure, it was structural: an orthographic projection has no
- * horizon and nothing shrinks with distance, so no amount of retuning it
- * produces a behind-and-above chase-camera look. This scene instead computes
- * every drawn point's screen position numerically via `project()`, using a
- * camera that chases from behind the car (position/yaw eased via
- * `nextCameraPose`, reused unchanged from the previous pass — see
- * CLAUDE.md's camera rule) and draws the car itself as a screen-space
- * billboard rotated by slip angle, not a projected 3D chassis. Throws if a
- * 2D context is unavailable; main.ts catches that so a canvas-less browser
- * still gets the full instrument-panel explanation (CLAUDE.md: DOM state is
- * the non-visual truth, the canvas is not required for the interaction to be
- * legible). */
+/** Builds the 3D rear-chase scene: a real `THREE.Scene`/`WebGLRenderer`/
+ * `PerspectiveCamera`, a procedural track ribbon rebuilt whenever the
+ * selected track changes, one genuine 3D vehicle, and dusk lighting/scenery
+ * from `environment.ts`. Throws if a WebGL context is unavailable (jsdom
+ * under Vitest, or a browser with WebGL disabled); `main.ts` already catches
+ * that so a canvas-less browser still gets the full instrument-panel
+ * explanation (CLAUDE.md: DOM state is the non-visual truth, the canvas is
+ * not required for the interaction to be legible). The canvas stays blank
+ * until the vehicle and the first track's scenery have both finished loading
+ * — the same "no interface change, update() is a no-op until ready" contract
+ * the plan calls for. */
 export function createGripScene(canvas: HTMLCanvasElement): GripScene {
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("2D canvas context unavailable");
-  // Re-bound with an explicit non-null type: TS's null-narrowing above only
-  // covers direct references in this scope, not the nested closures below.
-  const ctx: CanvasRenderingContext2D = context;
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(SKY_HORIZON_COLOR);
+  scene.fog = new THREE.Fog(new THREE.Color(SKY_HORIZON_COLOR), FOG_NEAR_METERS, FOG_FAR_METERS);
+  const staticEnvironment = buildStaticEnvironment();
+  scene.add(staticEnvironment);
+
+  const camera = new THREE.PerspectiveCamera(
+    THREE.MathUtils.radToDeg(CAMERA_VERTICAL_FOV_RADIANS),
+    1,
+    CAMERA_NEAR_METERS,
+    CAMERA_FAR_METERS,
+  );
+
+  let trackGroup: THREE.Group | null = null;
+  let sceneryGroup: THREE.Group | null = null;
+  let currentTrackId: TrackId | null = null;
+  // Bumped every time a track rebuild starts; a rebuild's async work checks
+  // this before applying its result, so a rapid double track-switch (or a
+  // dispose() mid-load) can never have a stale, superseded load clobber a
+  // newer one or resurrect geometry into a torn-down scene.
+  let rebuildGeneration = 0;
+
+  let vehicle: Vehicle | null = null;
+  loadVehicle().then((loaded) => {
+    vehicle = loaded;
+    scene.add(loaded.root);
+  });
+
+  function rebuildTrack(trackId: TrackId): void {
+    if (trackId === currentTrackId) return;
+    currentTrackId = trackId;
+    const generation = ++rebuildGeneration;
+    const track = TRACK_PRESETS[trackId] ?? TRACK_PRESETS[DEFAULT_TRACK_ID];
+
+    if (trackGroup) {
+      scene.remove(trackGroup);
+      disposeGroup(trackGroup, true);
+      trackGroup = null;
+    }
+    trackGroup = buildTrackGeometry(track);
+    scene.add(trackGroup);
+
+    buildScenery(track).then((built) => {
+      if (generation !== rebuildGeneration) {
+        // Superseded by a later track switch (or the scene was disposed)
+        // while this scatter was still loading — discard it instead of
+        // adding stale scenery on top of whatever's current now.
+        disposeGroup(built, false);
+        return;
+      }
+      if (sceneryGroup) {
+        scene.remove(sceneryGroup);
+        disposeGroup(sceneryGroup, false);
+      }
+      sceneryGroup = built;
+      scene.add(built);
+    });
+  }
+
+  const trailPool: TrailSlot[] = [];
+  for (let i = 0; i < TRAIL_MAX_POINTS; i++) {
+    const geometry = new THREE.CircleGeometry(TRAIL_DOT_RADIUS_METERS, 12);
+    geometry.rotateX(-Math.PI / 2);
+    const material = new THREE.MeshBasicMaterial({ color: FRONT_COLOR, transparent: true, opacity: 0 });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.visible = false;
+    scene.add(mesh);
+    trailPool.push({ mesh, material });
+  }
 
   let trail: TrailPoint[] = [];
   let lastElapsed = 0;
   // The camera's actual (eased) pose, vs. state.x/y/heading which is always
-  // the car's true physics pose — the car billboard's anchor point is
-  // projected from the true pose every frame, only the camera itself lags.
-  // `rotation` here is the camera's world-frame *yaw* (see projection.ts's
-  // Camera.yaw), not a screen-rotation angle the way the orthographic
-  // scene's `cameraRotation` was — see the module doc comment above. The
-  // initial value matches the very first frame's target for a stationary car
-  // at the origin heading 0 (worldTravelHeading 0, so the camera sits
-  // CHASE_DISTANCE_METERS behind the origin along +x, yaw 0), so there's no
-  // pop on initial render.
+  // the car's true physics pose. `rotation` here is the camera's world-frame
+  // *yaw* (a sim-space heading angle, same convention as SimState.heading —
+  // see below), not a screen-rotation angle. The initial value matches the
+  // very first frame's target for a stationary car at the origin heading 0
+  // (worldTravelHeading 0, so the camera sits CHASE_DISTANCE_METERS behind
+  // the origin along +x, yaw 0), so there's no pop on initial render.
   let cameraPose: CameraPose = { x: -CHASE_DISTANCE_METERS, y: 0, rotation: 0 };
   let zoomFactor = 1;
   let lastFrameTimestamp: number | null = null;
@@ -144,147 +179,10 @@ export function createGripScene(canvas: HTMLCanvasElement): GripScene {
     const dpr = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO);
     const width = Math.max(1, canvas.clientWidth);
     const height = Math.max(1, canvas.clientHeight);
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
-  }
-
-  /** Fills a screen-space polygon (already-projected points) if every corner
-   * is visible — with a bounded draw distance and near-plane cutoff, a
-   * segment straddling the edge of visibility is rare enough that skipping
-   * it outright (rather than clipping it) reads as nothing worse than the
-   * road fading in a touch further out than the nominal draw distance. */
-  function fillProjectedQuad(points: ProjectedPoint[], color: string): void {
-    if (!points.every((p) => p.visible)) return;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(points[0].screenX, points[0].screenY);
-    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].screenX, points[i].screenY);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  /** Draws the road as a sequence of projected, banded quads sampled along
-   * the track's arc — the classic Out Run technique adapted from scanlines
-   * to explicit polygons. Sampled on a world-fixed grid of `k` indices
-   * (`theta_k = start + directionSign * k * ROAD_SAMPLE_STEP_METERS /
-   * radius`), not on indices relative to the current draw window, so a given
-   * physical stretch of road is always the same band regardless of where the
-   * camera currently is — the banding scrolls toward the viewer as a motion
-   * cue instead of flickering as the window recomputes each frame. */
-  function drawRoad(track: TrackParams, state: SimState, camera: Camera, viewport: Viewport): void {
-    const { cx, cy } = trackCentre(track);
-    const centre: WorldPoint = { x: cx, y: cy };
-    const { start, end } = arcAngles(track);
-    const directionSign = track.direction === "left" ? 1 : -1;
-    const dTheta = ROAD_SAMPLE_STEP_METERS / track.radius;
-
-    // Where the car currently is along the arc, in the same signed-progress
-    // terms `sweptAngleRate` (track.ts) already integrates — reusing
-    // `state.sweptAngle` avoids re-deriving "how far around the corner" via
-    // trigonometry on the car's position.
-    const carRawAngle = start + directionSign * state.sweptAngle;
-    const carProgress = directionSign * (carRawAngle - start); // === state.sweptAngle
-
-    const behindMarginAngle = ROAD_BEHIND_MARGIN_METERS / track.radius;
-    const aheadAngle = ROAD_DRAW_DISTANCE_METERS / track.radius;
-    const progressFrom = Math.max(0, carProgress - behindMarginAngle);
-    const progressTo = Math.min(track.sweepAngle, carProgress + aheadAngle);
-
-    const kMin = Math.floor(progressFrom / dTheta);
-    const kMax = Math.ceil(progressTo / dTheta);
-
-    function angleAt(k: number): number {
-      return start + directionSign * k * dTheta;
-    }
-
-    function projectAt(radius: number, k: number): ProjectedPoint {
-      const point = pointOnArc(centre, radius, angleAt(k));
-      return project(point.x, point.y, camera, viewport);
-    }
-
-    for (let k = kMin; k < kMax; k++) {
-      const bandColor = k % 2 === 0 ? ROAD_COLOR : ROAD_COLOR_ALT;
-      const kerbColor = k % 2 === 0 ? KERB_COLOR_A : KERB_COLOR_B;
-
-      const innerA = projectAt(track.radius - ROAD_HALF_WIDTH, k);
-      const innerB = projectAt(track.radius - ROAD_HALF_WIDTH, k + 1);
-      const outerA = projectAt(track.radius + ROAD_HALF_WIDTH, k);
-      const outerB = projectAt(track.radius + ROAD_HALF_WIDTH, k + 1);
-      fillProjectedQuad([innerA, outerA, outerB, innerB], bandColor);
-
-      const kerbInnerA = projectAt(track.radius - ROAD_HALF_WIDTH - KERB_WIDTH_METERS, k);
-      const kerbInnerB = projectAt(track.radius - ROAD_HALF_WIDTH - KERB_WIDTH_METERS, k + 1);
-      fillProjectedQuad([kerbInnerA, innerA, innerB, kerbInnerB], kerbColor);
-
-      const kerbOuterA = projectAt(track.radius + ROAD_HALF_WIDTH + KERB_WIDTH_METERS, k);
-      const kerbOuterB = projectAt(track.radius + ROAD_HALF_WIDTH + KERB_WIDTH_METERS, k + 1);
-      fillProjectedQuad([outerA, kerbOuterA, kerbOuterB, outerB], kerbColor);
-
-      if (k % 2 === 0) {
-        const refInnerA = projectAt(track.radius - 0.15, k);
-        const refInnerB = projectAt(track.radius - 0.15, k + 1);
-        const refOuterA = projectAt(track.radius + 0.15, k);
-        const refOuterB = projectAt(track.radius + 0.15, k + 1);
-        fillProjectedQuad([refInnerA, refOuterA, refOuterB, refInnerB], REFERENCE_LINE_COLOR);
-      }
-    }
-
-    // Finish marker: a solid bar across the road + kerb width at the exact
-    // angle the track's swept arc ends — the visual promise that this run
-    // has somewhere finite to reach, not an open-ended corner (CLAUDE.md).
-    // Projected like every other road feature, so it recedes/disappears with
-    // distance and behind-camera the same way; `fillProjectedQuad` already
-    // no-ops when any corner isn't visible.
-    const finishInner = project(
-      pointOnArc(centre, track.radius - ROAD_HALF_WIDTH - KERB_WIDTH_METERS, end).x,
-      pointOnArc(centre, track.radius - ROAD_HALF_WIDTH - KERB_WIDTH_METERS, end).y,
-      camera,
-      viewport,
-    );
-    const finishOuter = project(
-      pointOnArc(centre, track.radius + ROAD_HALF_WIDTH + KERB_WIDTH_METERS, end).x,
-      pointOnArc(centre, track.radius + ROAD_HALF_WIDTH + KERB_WIDTH_METERS, end).y,
-      camera,
-      viewport,
-    );
-    const finishBackAngle = end - directionSign * (ROAD_SAMPLE_STEP_METERS / track.radius) * 0.4;
-    const finishInnerBack = project(
-      pointOnArc(centre, track.radius - ROAD_HALF_WIDTH - KERB_WIDTH_METERS, finishBackAngle).x,
-      pointOnArc(centre, track.radius - ROAD_HALF_WIDTH - KERB_WIDTH_METERS, finishBackAngle).y,
-      camera,
-      viewport,
-    );
-    const finishOuterBack = project(
-      pointOnArc(centre, track.radius + ROAD_HALF_WIDTH + KERB_WIDTH_METERS, finishBackAngle).x,
-      pointOnArc(centre, track.radius + ROAD_HALF_WIDTH + KERB_WIDTH_METERS, finishBackAngle).y,
-      camera,
-      viewport,
-    );
-    fillProjectedQuad([finishInnerBack, finishOuterBack, finishOuter, finishInner], FINISH_MARKER_COLOR);
-  }
-
-  function drawTrail(camera: Camera, viewport: Viewport, reducedMotion: boolean): void {
-    // A point exactly CHASE_DISTANCE_METERS ahead of the camera (i.e. right
-    // where the car itself normally sits) is the self-consistent "full
-    // opacity" reference scale — trail dots at roughly that distance or
-    // nearer draw at full strength, farther ones fade further on top of the
-    // existing age-based fade, rather than needing a second, hand-picked
-    // reference constant.
-    const fullOpacityScale = camera.focalLength / CHASE_DISTANCE_METERS;
-    for (let i = 0; i < trail.length; i++) {
-      const point = trail[i];
-      const age = trail.length - i;
-      const ageOpacity = reducedMotion ? 0.5 : Math.max(0, 1 - age / TRAIL_MAX_POINTS);
-      const projected = project(point.x, point.y, camera, viewport);
-      if (!projected.visible) continue;
-      const distanceOpacity = Math.min(1, projected.scale / fullOpacityScale);
-      ctx.globalAlpha = ageOpacity * distanceOpacity;
-      ctx.fillStyle = point.color;
-      ctx.beginPath();
-      ctx.arc(projected.screenX, projected.screenY, TRAIL_DOT_RADIUS_METERS * projected.scale, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
+    renderer.setPixelRatio(dpr);
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
   }
 
   /** Cheap, non-photorealistic evidence of *where* an axle spent its
@@ -297,33 +195,41 @@ export function createGripScene(canvas: HTMLCanvasElement): GripScene {
    * the same signal. */
   function recordTrail(state: SimState, isFreshStart: boolean): void {
     if (isFreshStart) trail = [];
-
     if (state.phase !== "running") return;
 
-    const forwardX = Math.cos(state.heading);
-    const forwardY = Math.sin(state.heading);
+    const { front, rear } = axleWorldPoints(state);
     if (state.front.saturated) {
-      trail.push({
-        x: state.x + forwardX * CAR_PARAMS.wheelbaseHalf,
-        y: state.y + forwardY * CAR_PARAMS.wheelbaseHalf,
-        color: wheelColor(FRONT_COLOR, state.front.utilisation, true),
-      });
+      trail.push({ x: front.x, z: front.z, color: wheelColor(FRONT_COLOR, state.front.utilisation, true) });
     }
     if (state.rear.saturated) {
-      trail.push({
-        x: state.x - forwardX * CAR_PARAMS.wheelbaseHalf,
-        y: state.y - forwardY * CAR_PARAMS.wheelbaseHalf,
-        color: wheelColor(REAR_COLOR, state.rear.utilisation, true),
-      });
+      trail.push({ x: rear.x, z: rear.z, color: wheelColor(REAR_COLOR, state.rear.utilisation, true) });
     }
     if (trail.length > TRAIL_MAX_POINTS) trail = trail.slice(trail.length - TRAIL_MAX_POINTS);
   }
 
+  function drawTrail(reducedMotion: boolean): void {
+    for (let i = 0; i < trailPool.length; i++) {
+      const slot = trailPool[i];
+      const point = trail[i];
+      if (!point) {
+        slot.mesh.visible = false;
+        continue;
+      }
+      slot.mesh.visible = true;
+      slot.mesh.position.set(point.x, TRAIL_LIFT_METERS, point.z);
+      slot.material.color.copy(point.color);
+      const age = trail.length - i;
+      slot.material.opacity = reducedMotion ? 0.5 : Math.max(0, 1 - age / TRAIL_MAX_POINTS);
+    }
+  }
+
   function update(state: SimState, reducedMotion: boolean): void {
-    const track = TRACK_PRESETS[state.track] ?? TRACK_PRESETS[DEFAULT_TRACK_ID];
+    rebuildTrack(state.track);
+
     const isFreshStart = state.elapsed < lastElapsed;
     lastElapsed = state.elapsed;
     recordTrail(state, isFreshStart);
+    drawTrail(reducedMotion);
 
     // Frame-rate-independent dt for the camera easing below — this is purely
     // cosmetic (camera pose only), so using wall-clock time here does not
@@ -336,46 +242,29 @@ export function createGripScene(canvas: HTMLCanvasElement): GripScene {
     const dt = lastFrameTimestamp === null ? 0 : Math.min(0.1, Math.max(0, (now - lastFrameTimestamp) / 1000));
     lastFrameTimestamp = now;
 
-    const dpr = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    const cssWidth = canvas.width / dpr;
-    const cssHeight = canvas.height / dpr;
-    const viewport: Viewport = { width: cssWidth, height: cssHeight };
-
     // Camera target: chases from directly behind the car along its current
     // *travel* heading (world-frame velocity direction, not body heading —
-    // see CLAUDE.md's camera rule), at a fixed distance/height. Yaw tracks
-    // travel heading directly (no `pi/2 -` offset the way the old
-    // screen-rotation target needed — this is a world-frame camera facing
-    // angle now, not a canvas rotation). Straight-line, no-slip driving
-    // therefore keeps the car centred with its nose pointing straight up the
-    // road; the instant an axle saturates and body heading diverges from
-    // travel direction, the car billboard itself visibly rotates by the slip
-    // angle (see the car-drawing block below) while the road/camera framing
-    // stays stable — that rotation, not a yawing frame, is now the
-    // legibility signal this whole redesign exists to preserve.
+    // see CLAUDE.md's camera rule), at a fixed distance/height. Straight-
+    // line, no-slip driving keeps the car centred with its nose pointing
+    // straight up the road; the instant an axle saturates and body heading
+    // diverges from travel direction, the chassis itself visibly yaws (a
+    // real 3D rotation now, not a screen-space billboard trick) while the
+    // road/camera framing stays stable — that rotation is the legibility
+    // signal this whole redesign exists to preserve.
     const worldTravelHeading = state.heading + Math.atan2(state.vy, state.vx);
     const targetX = state.x - CHASE_DISTANCE_METERS * Math.cos(worldTravelHeading);
     const targetY = state.y - CHASE_DISTANCE_METERS * Math.sin(worldTravelHeading);
 
-    // Ease the camera's position/yaw toward that target, except: not under
-    // reducedMotion (snap every frame, same as drawTrail's opacity branch),
-    // not outside an active run (a stationary car has nothing to smooth
-    // over), and not on the exact frame a fresh run teleports the car back
-    // to its track's start (panning smoothly across a teleport would
-    // misrepresent an instantaneous event as continuous motion — see
-    // nextCameraPose's doc comment in camera.ts). `nextCameraPose` itself is
-    // reused completely unchanged from the previous pass; only what's fed in
-    // as the target has changed.
     const poseEasingEnabled = !reducedMotion && state.phase === "running" && !isFreshStart;
     cameraPose = nextCameraPose(cameraPose, { x: targetX, y: targetY, rotation: worldTravelHeading }, dt, poseEasingEnabled);
 
     // Run-start zoom "settle": a deliberate flourish, not a bug fix (see
-    // camera.ts's RUN_START_ZOOM_FACTOR doc comment) — pull back slightly
-    // (a shorter focal length) the instant a fresh run starts, then ease in
-    // to the normal focal length. Disabled under reducedMotion, matching
-    // every other eased effect here.
+    // camera.ts's RUN_START_ZOOM_FACTOR doc comment) — widen the field of
+    // view slightly the instant a fresh run starts, then ease back to the
+    // normal FOV. A *smaller* zoomFactor means a *wider* FOV here (see the
+    // fov-from-zoomFactor derivation below), matching the old renderer's
+    // "shorter focal length" pull-back exactly. Disabled under
+    // reducedMotion, matching every other eased effect here.
     if (reducedMotion) {
       zoomFactor = 1;
     } else if (isFreshStart && state.phase === "running") {
@@ -384,61 +273,78 @@ export function createGripScene(canvas: HTMLCanvasElement): GripScene {
       zoomFactor = approach(zoomFactor, 1, dt, CAMERA_ZOOM_SETTLE_TIME_CONSTANT_SECONDS);
     }
 
-    const camera: Camera = {
-      x: cameraPose.x,
-      y: cameraPose.y,
-      yaw: cameraPose.rotation,
-      height: CAMERA_HEIGHT_METERS,
-      pitch: CAMERA_PITCH_RADIANS,
-      focalLength: cssHeight * FOCAL_LENGTH_TO_VIEWPORT_HEIGHT_RATIO * zoomFactor,
-    };
+    // tan(fov/2) is inversely proportional to focal length; the old
+    // renderer multiplied its focal length by zoomFactor directly, so the
+    // equivalent fov satisfies tan(fov/2) = tan(baseFov/2) / zoomFactor.
+    const fovRadians = 2 * Math.atan(Math.tan(CAMERA_VERTICAL_FOV_RADIANS / 2) / zoomFactor);
+    camera.fov = THREE.MathUtils.radToDeg(fovRadians);
+    camera.updateProjectionMatrix();
 
-    // Sky/ground split at the horizon — not a second, independently-tuned
-    // constant: `horizonScreenY` falls out of the exact same
-    // pitch/focalLength/viewport math `project` uses for every other point
-    // (see projection.ts), so it always lines up with where the road itself
-    // vanishes.
-    const horizon = horizonScreenY(camera, viewport);
-    ctx.fillStyle = SKY_COLOR;
-    ctx.fillRect(0, 0, cssWidth, Math.max(0, horizon));
-    ctx.fillStyle = GROUND_COLOR;
-    ctx.fillRect(0, Math.max(0, horizon), cssWidth, cssHeight - Math.max(0, horizon));
+    const eye = simToWorld(cameraPose.x, cameraPose.y);
+    camera.position.set(eye.x, CAMERA_HEIGHT_METERS, eye.z);
 
-    drawRoad(track, state, camera, viewport);
-    drawTrail(camera, viewport, reducedMotion);
+    // Look-at target derived directly from the camera's own eased yaw
+    // (`cameraPose.rotation`, a sim-space heading — CCW-positive from +x,
+    // the exact same convention `SimState.heading` uses) plus a fixed
+    // downward pitch, rather than a rotation.y offset the way vehicle.ts's
+    // model-specific mapping needs: a look-at target has no "local forward
+    // axis" ambiguity to resolve, so composing yaw and pitch directly into a
+    // world-space direction vector is both simpler and exactly equivalent.
+    // `simToWorld`'s worldZ = -simY means a unit step along sim heading
+    // theta maps to world (cos theta, 0, -sin theta); tilting that down by
+    // `pitch` scales the horizontal component by cos(pitch) and adds
+    // -sin(pitch) to the vertical component.
+    const yaw = cameraPose.rotation;
+    const forward = new THREE.Vector3(
+      Math.cos(yaw) * Math.cos(CAMERA_PITCH_RADIANS),
+      -Math.sin(CAMERA_PITCH_RADIANS),
+      -Math.sin(yaw) * Math.cos(CAMERA_PITCH_RADIANS),
+    );
+    camera.lookAt(camera.position.clone().add(forward));
 
-    // The car is a screen-space billboard (CLAUDE.md's camera rule): its
-    // anchor point is the car's true world position run through the same
-    // `project()` as everything else — so camera lag during a hard slide
-    // honestly nudges its screen position, exactly like a real chase camera
-    // would show — but the sprite itself is flat 2D art, not projected 3D
-    // geometry. Its rotation is the slip angle (`state.heading -
-    // worldTravelHeading`): zero during normal no-slip driving (nose stays
-    // pointing straight up the screen, matching the camera's own travel-
-    // heading-aligned yaw), growing the instant an axle saturates — this
-    // replaces "the frame yaws" as the core legibility signal, since the
-    // frame itself is now deliberately stable (a real chase camera doesn't
-    // yaw with every wiggle of the car it's following).
-    const carAnchor = project(state.x, state.y, camera, viewport);
-    if (carAnchor.visible) {
-      const slipAngle = state.heading - worldTravelHeading;
-      ctx.save();
-      ctx.translate(carAnchor.screenX, carAnchor.screenY);
-      ctx.rotate(-slipAngle);
-      ctx.scale(carAnchor.scale, carAnchor.scale);
-      const frontSteerAngle = state.steering * CAR_PARAMS.maxSteerAngle;
-      drawCar(
-        ctx,
-        frontSteerAngle,
-        wheelColor(FRONT_COLOR, state.front.utilisation, state.front.saturated),
-        wheelColor(REAR_COLOR, state.rear.utilisation, state.rear.saturated),
-      );
-      ctx.restore();
-    }
+    vehicle?.update(state);
+
+    renderer.render(scene, camera);
   }
 
+  /** Frees every GPU resource this scene created — real work now that
+   * rendering is real WebGL, unlike the previous 2D canvas's no-op
+   * `dispose()`. `rebuildGeneration++` first so any track-scenery load still
+   * in flight discards its result instead of adding stale geometry back into
+   * a torn-down scene (see `rebuildTrack`'s doc comment). Shared, cached
+   * glTF geometry (the vehicle, and every scattered prop) is deliberately
+   * not disposed here — only per-instance materials are, via
+   * `disposeGroup`'s `disposeGeometries: false` — since `asset-loader.ts`'s
+   * module-level cache may still be serving that same geometry to a future
+   * scene in this session. */
   function dispose(): void {
-    // No WebGL context / GPU resources to release for a 2D canvas.
+    rebuildGeneration++;
+
+    scene.remove(staticEnvironment);
+    disposeGroup(staticEnvironment, true);
+
+    if (trackGroup) {
+      scene.remove(trackGroup);
+      disposeGroup(trackGroup, true);
+      trackGroup = null;
+    }
+    if (sceneryGroup) {
+      scene.remove(sceneryGroup);
+      disposeGroup(sceneryGroup, false);
+      sceneryGroup = null;
+    }
+    if (vehicle) {
+      scene.remove(vehicle.root);
+      disposeGroup(vehicle.root, false);
+      vehicle = null;
+    }
+    for (const slot of trailPool) {
+      scene.remove(slot.mesh);
+      slot.mesh.geometry.dispose();
+      slot.material.dispose();
+    }
+
+    renderer.dispose();
   }
 
   resize();

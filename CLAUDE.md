@@ -217,11 +217,20 @@ the agent from drifting off that idea or breaking the harness that tests it.
   steering/throttle telemetry) is the non-visual truth of the page; a
   canvas-only representation of any of that state is not acceptable,
   canvas-unavailable or not.
-- **No downloaded 3D models, large textures, external font files, or
-  Three.js/WebGL.** The car, road, and reference line are drawn with plain
-  2D canvas primitives (rects, arcs); type with system/local fonts. Get
-  explicit sign-off before adding any binary asset pipeline or 3D rendering
-  back.
+- **The scene is a real Three.js/WebGL 3D scene, not a 2D canvas trick.**
+  This is a deliberate reversal of an earlier decision (see git history) —
+  the car, road, and trackside scenery are genuine 3D geometry, lit and
+  shadowed, not projected/billboarded onto a flat canvas. Any 3D asset added
+  to `public/assets/` must be a curated, individually-inspected CC0 file
+  (Kenney packs so far) — never a whole downloaded pack, and never a model
+  whose licence hasn't been checked. Document every retained file in
+  `docs/asset-sources.md` (original filename, local filename, provider,
+  source URL, download date, licence, conversion notes) in the same commit
+  that adds it. Never guess a glTF scene graph's node names (e.g. wheel
+  nodes) from convention or a filename — parse the asset and confirm them
+  directly, the way `asset-loader.ts`'s `WHEEL_NODE_NAMES` comment
+  documents having done. Keep system/local fonts for all text; this rule is
+  about 3D geometry and textures, not typography.
 - **Don't add another vehicle-dynamics concept** (ABS/ESC/TC, tyre
   temperature/wear, suspension, differential, aero, detailed dynamic weight
   transfer, gear/clutch) unless it directly demonstrates the shared-budget
@@ -258,84 +267,54 @@ the agent from drifting off that idea or breaking the harness that tests it.
   failure from a friction-circle overload, and invisible unless you check
   the car can actually track the reference line, not just that it doesn't
   spin.
-- **The scene renders through a hand-rolled perspective (pinhole) camera
-  over the ground plane — never an orthographic top-down transform
-  (`ctx.translate` → `ctx.scale` → `ctx.rotate`) — because a behind-and-above
-  chase-camera look is *structurally* impossible with an orthographic
-  projection, not merely a matter of tuning.** Two earlier passes rotated the
-  orthographic camera to velocity heading and then anchored it low/zoomed in;
-  both were implemented correctly and still read as a radar/map view, because
-  orthographic projection has no horizon and nothing shrinks with distance —
-  no parameter of that transform can produce either. The actual fix is the
-  classic Out Run/Pole Position technique: every drawn point's screen
-  position is computed numerically via `project()` in
-  `src/rendering/projection.ts` (translate → yaw-rotate → pitch-rotate →
-  perspective-divide, ground assumed at z=0 everywhere, matching
-  `physics.ts`'s flat-ground model), using a real pinhole camera with
-  position, yaw, height above the ground, downward pitch, and focal length.
-  `horizonScreenY` falls out of that same math (the limit of `project`'s
-  `camVert/depth` as distance → ∞) rather than being a second,
-  independently-tuned constant — if you change pitch or focal length, the
-  horizon and the road's own vanishing point move together automatically. Do
-  not reintroduce Three.js/WebGL/true 3D geometry to get this look — the
-  camera math is 2D-canvas-drawable numbers, not GPU geometry; see the "no
-  downloaded 3D models" rule below, which still applies.
+- **The sim-to-world coordinate mapping is one derived formula, isolated in
+  `src/rendering/coordinates.ts`, and every other rendering module must go
+  through it rather than re-deriving its own.** `worldX = simX`, `worldZ =
+  -simY`, ground plane at world `Y = 0`; `headingToWorldRotationY(heading) =
+  heading + Math.PI / 2` is specific to `sedan.glb`'s own local forward axis
+  (+Z, confirmed by its wheel node translations, not assumed) and must be
+  re-derived — by inspecting the new asset's local axes, not by guessing —
+  if the vehicle model ever changes. The camera's own orientation is derived
+  separately via `camera.lookAt()` on a directly-computed world-space
+  forward vector (see `scene.ts`), not this same rotation formula: a lookAt
+  target has no "local forward axis" ambiguity to resolve, so it's a
+  different derivation, not a shortcut around this one.
+- **The road, kerbs, reference line, and finish marker are procedural
+  Three.js geometry generated from `TrackParams` — never a modular tile
+  kit — because an arbitrary-radius arc can't be laid out from fixed-size
+  pieces.** `src/rendering/track-geometry.ts` samples the track's own arc
+  (`arcAngles`/`sampleArcAngles`/`pointOnArc`, pure and unit-tested) and
+  builds the full ribbon once per track selection as static
+  `BufferGeometry` — there is no bounded draw-distance window to keep in
+  sync frame-to-frame the way the old 2D renderer needed, since real
+  frustum culling and fog (`environment.ts`) handle draw distance now. Kenney
+  assets are reserved for the vehicle and discrete scattered props (barriers,
+  posts, trees, rocks) only, never the road surface itself.
 - **Camera yaw tracks the car's current velocity heading (direction of
   travel) directly — never its body heading — and the camera chases from
-  behind at a fixed distance/height; slip is now shown by the car sprite
-  rotating, not by the frame yawing.** `worldTravelHeading = heading +
-  atan2(vy, vx)`; the camera's target position is the car's true position
-  offset backward along that heading by `CHASE_DISTANCE_METERS`, and its
-  target yaw is `worldTravelHeading` itself (see `src/rendering/scene.ts`'s
-  `update()`). This is a deliberate departure from the prior 2D (and the
-  original 3D) camera rule, which yawed the *frame* to keep the nose
-  vertical: a real chase camera doesn't swing to follow every wiggle of the
-  car it's tracking, so a stable, travel-heading-aligned frame is the more
-  honest — and more legible — choice once the car itself can carry the
-  rotation signal (see the next bullet). The camera's position/yaw still
-  ease toward that target with a small, bounded lag (`nextCameraPose`/
-  `approach`/`approachAngle` in `src/rendering/camera.ts`, reused completely
-  unchanged — only what's fed in as the target changed, not the easing
-  itself; time constant 0.05s, ~150ms to within ~5% of a step change), for a
-  more cinematic follow. This bound must stay short relative to how long a
-  saturation episode plays out. The run-start zoom-settle flourish
-  (`RUN_START_ZOOM_FACTOR`) also carries over unchanged. Both must collapse
-  to an instant snap when `reducedMotion` is true, the same way `drawTrail`'s
-  opacity branch already does.
-- **The car is drawn as a screen-space billboard, not projected 3D
-  geometry — its chassis is never run through `project()`, only its single
-  world anchor point is.** `scene.ts` projects `(state.x, state.y)` through
-  the same camera as every other point (so camera lag during a hard slide
-  honestly nudges the car's screen position, the same way it would nudge
-  anything else the camera is tracking), then draws the sprite locally in a
-  fixed template around that anchor, rotated by the **slip angle** —
-  `state.heading − worldTravelHeading` — and scaled by the projected point's
-  `scale`. Slip angle is zero during normal no-slip driving (the sprite
-  points straight up the screen, matching the camera's own travel-heading-
-  aligned yaw) and grows the instant an axle saturates and body heading
-  diverges from travel direction — this rotation, not a yawing frame, is now
-  the core legibility signal for saturation. It depends on `car.ts`'s sprite
-  being drawn for a rear-3/4 chase vantage (rear nearest/widest, front
-  farthest/narrowest, both axles' wheels visible enough that either's
-  saturation colour still reads) rather than a straight-down top view — see
-  `src/rendering/car.ts`'s `drawCar()`.
-- **Road, kerb, centre-line, and finish-marker geometry are drawn as banded
-  quads sampled along the track's arc and projected point-by-point, indexed
-  by a world-fixed sample index — never by the sliding draw window's own
-  loop index.** `scene.ts`'s `drawRoad()` samples every `ROAD_SAMPLE_STEP_METERS`
-  from the track's own fixed `start` angle (`k = floor(progress / dTheta)`,
-  where `progress` is measured from that fixed start, not from wherever the
-  camera's current bounded draw window happens to begin) and alternates band
-  colour by `k % 2`. This is deliberate: a given physical stretch of road
-  must always be the same band from one frame to the next, or the pattern
-  flickers instead of reading as scrolling toward the camera as the car
-  advances — a real bug class in perspective-road rendering (the technique's
-  entire "free" motion-cue benefit depends on band identity being stable).
-  `ROAD_DRAW_DISTANCE_METERS` is a bounded draw distance calibrated together
-  with `TRACK_PRESETS` (constants.ts), same discipline as `maxSteerAngle`: at
-  this distance a hairpin's full sweep is deliberately *not* all visible at
-  once, the same way a real chase camera never shows a whole corner in one
-  frame — don't "fix" that by raising it until the whole corner fits.
+  behind at a fixed distance/height; slip is now shown by the car's chassis
+  itself visibly yawing, not by the frame yawing.** `worldTravelHeading =
+  heading + atan2(vy, vx)`; the camera's target position is the car's true
+  position offset backward along that heading by `CHASE_DISTANCE_METERS`,
+  and its target yaw is `worldTravelHeading` itself (see
+  `src/rendering/scene.ts`'s `update()`). A real chase camera doesn't swing
+  to follow every wiggle of the car it's tracking, so a stable,
+  travel-heading-aligned frame is the more honest — and more legible —
+  choice, since the vehicle's own 3D rotation now carries the slip signal
+  directly (the billboard-rotation trick this rule used to describe is
+  retired along with the 2D renderer: with genuine 3D geometry, body heading
+  diverging from travel heading is visible as the chassis itself yawing,
+  with no separate sprite-rotation step needed). The camera's position/yaw
+  still ease toward that target with a small, bounded lag (`nextCameraPose`/
+  `approach`/`approachAngle` in `src/rendering/camera.ts`, unchanged since
+  the 2D renderer; time constant 0.05s, ~150ms to within ~5% of a step
+  change), for a more cinematic follow. This bound must stay short relative
+  to how long a saturation episode plays out. The run-start zoom-settle
+  flourish (`RUN_START_ZOOM_FACTOR`) also carries over, now expressed as a
+  per-frame `PerspectiveCamera.fov` recomputed from a fixed base FOV (see
+  `scene.ts`'s FOV-from-focal-length derivation comment) rather than a
+  focal-length constant. Both must collapse to an instant snap when
+  `reducedMotion` is true.
 - **Driving input is a set of discrete, pre-run settings played back
   deterministically — never real-time steering/throttle held by the
   visitor.** This was a deliberate redesign: real-time input makes visitor

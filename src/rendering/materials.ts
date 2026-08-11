@@ -1,0 +1,64 @@
+import * as THREE from "three";
+
+// Shared dusk palette. FRONT_COLOR/REAR_COLOR/DANGER_COLOR must stay
+// pixel-identical to main.css's --color-front/--color-rear/--color-danger
+// (CLAUDE.md: axle colours are fixed everywhere) — kept in sync by this
+// comment, the same convention the previous 2D renderer's car.ts used.
+// Every other constant here is new for the 3D scene and has no CSS
+// counterpart (nothing in the DOM currently draws sky/ground/road colour).
+export const FRONT_COLOR = "#4fd3e6";
+export const REAR_COLOR = "#d99a4e";
+export const DANGER_COLOR = "#ff6b57";
+
+export const SKY_TOP_COLOR = "#0c0f18";
+export const SKY_HORIZON_COLOR = "#5b6472";
+export const GROUND_COLOR = "#232a24";
+export const ROAD_COLOR = "#2c3038"; // charcoal — deliberately never pure black
+export const KERB_LIGHT_COLOR = "#dfdccf"; // off-white
+export const KERB_DARK_COLOR = "#5b6270"; // muted slate — replaces the old red/white racing-kerb banding
+export const REFERENCE_LINE_COLOR = "#dfdccf";
+export const FINISH_MARKER_COLOR = "#f2efe8";
+export const BODY_COLOR = "#e8e4da"; // warm ivory/light silver
+
+function hexToThreeColor(hex: string): THREE.Color {
+  return new THREE.Color(hex);
+}
+
+/** Lerps `base` toward the shared danger accent as an axle saturates —
+ * ported from the previous renderer's car.ts `wheelColor` (same `t` curve:
+ * grows past saturation onset rather than snapping instantly), now producing
+ * a THREE.Color for a material assignment instead of a CSS colour string. */
+export function wheelColor(base: string, utilisation: number, saturated: boolean): THREE.Color {
+  const t = saturated ? Math.min(1, (utilisation - 1) * 2 + 0.4) : 0;
+  const color = hexToThreeColor(base);
+  if (t <= 0) return color;
+  return color.lerp(hexToThreeColor(DANGER_COLOR), t);
+}
+
+export function createBodyMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: BODY_COLOR, roughness: 0.55, metalness: 0.25 });
+}
+
+export function createRoadMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: ROAD_COLOR, roughness: 0.95, metalness: 0 });
+}
+
+export function createKerbMaterial(light: boolean): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: light ? KERB_LIGHT_COLOR : KERB_DARK_COLOR,
+    roughness: 0.9,
+    metalness: 0,
+  });
+}
+
+export function createReferenceLineMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: REFERENCE_LINE_COLOR, roughness: 0.9, metalness: 0 });
+}
+
+export function createFinishMarkerMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: FINISH_MARKER_COLOR, roughness: 0.9, metalness: 0 });
+}
+
+export function createGroundMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: GROUND_COLOR, roughness: 1, metalness: 0 });
+}
