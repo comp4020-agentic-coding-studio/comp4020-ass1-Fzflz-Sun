@@ -231,6 +231,43 @@ the agent from drifting off that idea or breaking the harness that tests it.
   directly, the way `asset-loader.ts`'s `WHEEL_NODE_NAMES` comment
   documents having done. Keep system/local fonts for all text; this rule is
   about 3D geometry and textures, not typography.
+- **Never overwrite a glTF material without preserving its source `map`/UV
+  semantics.** A real regression once did exactly this: `sedan.glb`'s body
+  and wheel meshes all share one `colormap` atlas material, distinguished
+  only by which UV region each mesh samples, and replacing the body mesh's
+  material wholesale with a flat `MeshStandardMaterial` silently dropped the
+  atlas `map` — collapsing paint, glass, and lights into one flat colour.
+  Clone the source material and mutate only the specific property you mean
+  to change (e.g. `.emissive` for an additive accent); never construct a
+  fresh material to replace one that already carries a texture map.
+- **Procedural ground/road geometry must be tested for actual triangle
+  winding, derived from real vertex positions via a cross product — not
+  from a hand-written `normal` attribute.** GPU backface culling follows
+  winding order, not the `normal` attribute, so a geometry that supplies a
+  correct-looking `normal=(0,1,0)` can still be invisible from above if its
+  vertices wind the wrong way. This must be checked across every track
+  preset **and both directions** — `simToWorld`'s reflection combined with
+  differing angle-progression direction between left/right presets can flip
+  winding non-uniformly, so a fix verified only on one direction (or only
+  the default track) is not verified.
+- **Road and ground geometry must never be coplanar.** Two triangles sharing
+  a world-Y height z-fight unpredictably depending on camera angle and
+  floating-point rounding. Give the road/kerb/reference/finish layers and
+  the static ground plane distinct heights, close enough that no visible
+  gap or float appears between them.
+- **Visual acceptance testing of the 3D scene must always include a fresh
+  reload of the default right-turn track AND the corresponding left-turn
+  track, never just one direction.** A winding or coordinate-mapping bug
+  that only manifests in one direction (see the winding-order rule above)
+  is invisible if you only ever reload the default track.
+- **"The loader resolved" is not proof a glTF material is correct.** A
+  failed override can still leave `GLTFLoader`'s promise resolving
+  successfully — the bug is in what happened to the material after load,
+  not whether the load itself succeeded. After any change touching vehicle
+  or scenery materials, separately confirm in an actual screenshot that the
+  source texture's distinct colour regions (body paint vs. glass vs.
+  lights, or a wheel's tyre vs. rim) are still visible in the final camera
+  view, not just that no error was thrown.
 - **Don't add another vehicle-dynamics concept** (ABS/ESC/TC, tyre
   temperature/wear, suspension, differential, aero, detailed dynamic weight
   transfer, gear/clutch) unless it directly demonstrates the shared-budget
@@ -270,15 +307,57 @@ the agent from drifting off that idea or breaking the harness that tests it.
 - **The sim-to-world coordinate mapping is one derived formula, isolated in
   `src/rendering/coordinates.ts`, and every other rendering module must go
   through it rather than re-deriving its own.** `worldX = simX`, `worldZ =
-  -simY`, ground plane at world `Y = 0`; `headingToWorldRotationY(heading) =
-  heading + Math.PI / 2` is specific to `sedan.glb`'s own local forward axis
-  (+Z, confirmed by its wheel node translations, not assumed) and must be
-  re-derived — by inspecting the new asset's local axes, not by guessing —
-  if the vehicle model ever changes. The camera's own orientation is derived
-  separately via `camera.lookAt()` on a directly-computed world-space
-  forward vector (see `scene.ts`), not this same rotation formula: a lookAt
-  target has no "local forward axis" ambiguity to resolve, so it's a
-  different derivation, not a shortcut around this one.
+  -simY`, static ground plane at world `Y = 0` (the road/kerb/reference/
+  finish layers sit just above it — see the next rule, they are deliberately
+  **not** coplanar with the ground). Heading-to-rotation is generalized as
+  `localAxisHeadingToWorldRotationY(heading, localAxis)`, where `localAxis`
+  is whichever of `+x`/`-x`/`+z`/`-z` the specific model's own forward
+  direction actually is (confirmed by inspecting that asset's local axes,
+  never assumed) — `sedan.glb` uses `+z`, giving the old
+  `heading + Math.PI / 2` as one case of the general formula, not a
+  standalone rule. **A heading helper calibrated for one model is not
+  reusable for another without re-confirming that model's own local axis**
+  — this was a real bug: an earlier version applied the sedan's `+Z`-specific
+  formula to every scattered prop uniformly, which put barrier segments
+  ~90° off the road's own tangent even though the code "worked" (no error,
+  a rotation was applied — it was just the wrong one for that asset's axis).
+  The camera's own orientation is derived separately via `camera.lookAt()`
+  on a directly-computed world-space forward vector (see `scene.ts`), not
+  this same rotation formula: a lookAt target has no "local forward axis"
+  ambiguity to resolve, so it's a different derivation, not a shortcut
+  around this one.
+- **Kenney's packs are not unit-consistent with each other or with the
+  vehicle kit — confirm every asset's real bounding box, ground anchor, and
+  local forward axis by direct inspection before using it, never assume from
+  a filename or from another asset in the same pack.** "Scale 1" on a
+  barrier and "scale 1" on a light post mean different real sizes; a raw
+  GLB's mesh node can also carry a baked, off-centre translation (confirmed
+  on the Racing Kit's barrier/post/pylon: local translation `(-0.35, -0.01,
+  -0.65)` on their one mesh node) that a bare scale+position application
+  amplifies into visible drift as the scale factor grows. Every scattered
+  prop is placed through `fitAssetToSpec` (`src/rendering/asset-fit.ts`),
+  which measures the model's own raw bbox, scales it to an explicit
+  `AssetPlacementSpec { targetAxis, targetMeters, localForwardAxis }` —
+  a real-world target size in metres, **never a bare scale multiplier** —
+  then re-centres it horizontally and anchors it to the ground, independent
+  of whatever baked offset the source node happened to carry. Document each
+  asset's confirmed raw bbox, target, axis, and orientation semantics in
+  `docs/asset-sources.md` in the same commit that changes them.
+- **"The loader resolved" is not the same claim as "correctly sized,
+  anchored, and oriented"** — a promise resolving successfully says nothing
+  about whether the fitted scale, ground anchor, or rotation ended up right;
+  those are separate claims each needing their own check (a dot-product test
+  against the intended direction, a bbox re-measurement, a screenshot).
+  Extends the existing "loader resolved is not proof a material is correct"
+  rule below to geometry/placement, not just materials.
+- **Scattered-prop spacing must be derived from that asset's own fitted
+  size, never a fixed distance chosen independently of it.** A real bug:
+  barrier segments were placed every fixed 14m regardless of the asset's
+  own ~0.25m raw length, which read as scattered dots rather than a
+  guardrail. Spacing constants (`BARRIER_GAP_METERS`, `POST_SPACING_TO_
+  HEIGHT_RATIO` in `environment.ts`) are documented multiples/offsets of the
+  fitted size, computed after an async pre-pass measures it — never a bare
+  metres value picked to "look right" at one scale.
 - **The road, kerbs, reference line, and finish marker are procedural
   Three.js geometry generated from `TrackParams` — never a modular tile
   kit — because an arbitrary-radius arc can't be laid out from fixed-size
@@ -304,7 +383,17 @@ the agent from drifting off that idea or breaking the harness that tests it.
   directly (the billboard-rotation trick this rule used to describe is
   retired along with the 2D renderer: with genuine 3D geometry, body heading
   diverging from travel heading is visible as the chassis itself yawing,
-  with no separate sprite-rotation step needed). The camera's position/yaw
+  with no separate sprite-rotation step needed). `CAMERA_HEIGHT_METERS` and
+  `CHASE_DISTANCE_METERS` (`scene.ts`) are each a *base* figure multiplied
+  by `SCENE_SCALE` (`src/rendering/scene-scale.ts`, == `VEHICLE_SCALE`) —
+  a deliberate similarity transform, not incidental naming: scaling the
+  camera's eye height and follow distance by the same factor the vehicle
+  was scaled by keeps the car occupying the same fraction of the frame
+  regardless of `VEHICLE_SCALE`'s value (small-angle argument: angle
+  subtended by size `s` at distance `d` is `~s/d`, invariant under `s→k·s,
+  d→k·d`). `CAMERA_PITCH_RADIANS` and the vertical FOV are angles, not
+  lengths, so they are deliberately left unscaled — verified by an actual
+  screenshot comparison, not the algebra alone. The camera's position/yaw
   still ease toward that target with a small, bounded lag (`nextCameraPose`/
   `approach`/`approachAngle` in `src/rendering/camera.ts`, unchanged since
   the 2D renderer; time constant 0.05s, ~150ms to within ~5% of a step

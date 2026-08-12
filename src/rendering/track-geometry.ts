@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { TrackParams } from "../simulation/index.ts";
 import { trackCentre } from "../simulation/track.ts";
-import { simToWorld } from "./coordinates.ts";
+import { simToWorld, type WorldXZ } from "./coordinates.ts";
 import { createFinishMarkerMaterial, createKerbMaterial, createReferenceLineMaterial, createRoadMaterial } from "./materials.ts";
 
 // Sim-space (x, y) point on the ground plane, before the coordinates.ts
@@ -29,14 +29,18 @@ const FINISH_MARKER_DEPTH_METERS = 1.5;
 // dash period.
 const ARC_SAMPLE_STEP_METERS = 4;
 
-// Small upward offsets (metres) so kerb/reference/finish geometry never
-// shares an exact y with the road plane beneath it — coplanar triangles
-// z-fight unpredictably depending on floating-point rounding and viewing
-// angle, so each layer gets its own thin slice of headroom instead.
-const ROAD_LIFT_METERS = 0;
-const KERB_LIFT_METERS = 0.01;
-const REFERENCE_LIFT_METERS = 0.02;
-const FINISH_LIFT_METERS = 0.03;
+// Small upward offsets (metres) so every layer — including the road itself
+// — never shares an exact y with the layer beneath it. This used to leave
+// ROAD_LIFT_METERS at 0, exactly coplanar with environment.ts's ground plane
+// (also world Y=0): real, unpredictable z-fighting risk between road and
+// ground depending on floating-point rounding and viewing angle, even once
+// winding is correct. ROAD_LIFT_METERS is exported so vehicle.ts can sit the
+// car's wheels exactly on the road surface (not sunk 5mm into it) instead of
+// hard-coding a second, independent 0.
+export const ROAD_LIFT_METERS = 0.005;
+export const KERB_LIFT_METERS = 0.01;
+export const REFERENCE_LIFT_METERS = 0.02;
+export const FINISH_LIFT_METERS = 0.03;
 
 /** The car's starting angle (relative to a track's centre of curvature) and
  * the angle it sweeps toward as the run progresses — see `sweptAngleRate`
@@ -80,30 +84,56 @@ interface Edge {
   outer: Point2D;
 }
 
+/** Orders a triangle's three world-space points so its real geometric
+ * winding — cross(p1-p0, p2-p0) — faces +Y, swapping the last two points if
+ * it doesn't. This used to be assumed instead of checked: a single fixed
+ * vertex order was verified by hand only "for a segment running along
+ * +worldX", but `simToWorld`'s `worldZ = -simY` is a reflection, which
+ * flips triangle winding for one track direction relative to the other
+ * (confirmed against `track-geometry.test.ts`'s cross-product-derived
+ * winding assertions — a "right" track's fixed-order triangles came out
+ * back-facing, silently backface-culled by every `FrontSide` material, while
+ * "left" tracks happened to come out front-facing). Deriving the order from
+ * the actual points, per triangle, makes this correct for both mirror
+ * directions without special-casing `track.direction` anywhere, and without
+ * switching materials to `DoubleSide` (which would hide the bug rather than
+ * fix it, and cost an extra draw call per triangle). The explicit (0,1,0)
+ * normal attribute set below is for lighting only (this ribbon is flat, so
+ * that's always the correct shading normal regardless of vertex order) — it
+ * has no effect on backface culling, which is why this function must fix the
+ * winding itself rather than relying on that attribute. */
+function faceUpwards(p0: WorldXZ, p1: WorldXZ, p2: WorldXZ): [WorldXZ, WorldXZ, WorldXZ] {
+  const e1x = p1.x - p0.x;
+  const e1z = p1.z - p0.z;
+  const e2x = p2.x - p0.x;
+  const e2z = p2.z - p0.z;
+  // cross((e1x, 0, e1z), (e2x, 0, e2z)).y = e1z*e2x - e1x*e2z.
+  const crossY = e1z * e2x - e1x * e2z;
+  return crossY >= 0 ? [p0, p1, p2] : [p0, p2, p1];
+}
+
 /** One ribbon segment between two sampled edges as six non-indexed
  * vertices (two triangles) — deliberately not shared/indexed with its
  * neighbours, so kerb/reference-dash meshes (built from alternating
  * segments only) can have a hard colour boundary at every segment edge
- * without a shared vertex forcing a colour blend across it. Winding
- * (innerA, outerA, outerB) then (innerA, outerB, innerB) is chosen so the
- * geometric normal from that winding already points +Y — verified by hand
- * for a segment running along +worldX: cross((outerA-innerA), (outerB-innerA))
- * = (0, +, 0) — matching the explicit (0,1,0) normal attribute set below,
- * so the two never disagree about which side is "up". */
+ * without a shared vertex forcing a colour blend across it. */
 function buildSegmentGeometry(a: Edge, b: Edge, liftY: number): THREE.BufferGeometry {
   const innerA = simToWorld(a.inner.x, a.inner.y);
   const outerA = simToWorld(a.outer.x, a.outer.y);
   const innerB = simToWorld(b.inner.x, b.inner.y);
   const outerB = simToWorld(b.outer.x, b.outer.y);
 
+  const [t1a, t1b, t1c] = faceUpwards(innerA, outerA, outerB);
+  const [t2a, t2b, t2c] = faceUpwards(innerA, outerB, innerB);
+
   // biome-ignore format: one 3D point per line reads clearer here than prettier's wrap
   const positions = new Float32Array([
-    innerA.x, liftY, innerA.z,
-    outerA.x, liftY, outerA.z,
-    outerB.x, liftY, outerB.z,
-    innerA.x, liftY, innerA.z,
-    outerB.x, liftY, outerB.z,
-    innerB.x, liftY, innerB.z,
+    t1a.x, liftY, t1a.z,
+    t1b.x, liftY, t1b.z,
+    t1c.x, liftY, t1c.z,
+    t2a.x, liftY, t2a.z,
+    t2b.x, liftY, t2b.z,
+    t2c.x, liftY, t2c.z,
   ]);
   const normals = new Float32Array(18);
   for (let i = 1; i < 18; i += 3) normals[i] = 1;

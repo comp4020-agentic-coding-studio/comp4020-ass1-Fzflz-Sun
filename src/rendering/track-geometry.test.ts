@@ -1,6 +1,17 @@
+import * as THREE from "three";
 import { describe, expect, it } from "vitest";
+import { TRACK_PRESETS } from "../simulation/constants.ts";
 import type { TrackParams } from "../simulation/index.ts";
-import { arcAngles, pointOnArc, sampleArcAngles } from "./track-geometry.ts";
+import {
+  arcAngles,
+  buildTrackGeometry,
+  FINISH_LIFT_METERS,
+  KERB_LIFT_METERS,
+  pointOnArc,
+  REFERENCE_LIFT_METERS,
+  ROAD_LIFT_METERS,
+  sampleArcAngles,
+} from "./track-geometry.ts";
 
 function track(overrides: Partial<TrackParams>): TrackParams {
   return {
@@ -68,5 +79,57 @@ describe("sampleArcAngles", () => {
   it("produces at least two samples even for a tiny sweep", () => {
     const angles = sampleArcAngles(track({ sweepAngle: 0.001, radius: 45 }), 4);
     expect(angles.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// Regression coverage for a real bug: simToWorld's worldZ = -simY is a
+// reflection, which flips triangle winding for one track direction relative
+// to the other. buildSegmentGeometry used to assume one fixed vertex order
+// was always correct (verified only "by hand for a segment running along
+// +worldX"), which made every right-turn track's road/kerb/reference-line
+// backface-cull invisible from the default chase camera while every
+// left-turn track looked fine. These tests derive each triangle's real
+// geometric normal from its actual world-space vertex positions via a cross
+// product — deliberately not reading the hand-written `normal` buffer
+// attribute, since that attribute and the true winding-derived normal can
+// disagree (GPU backface culling follows winding order, not the normal
+// attribute) and a bug in exactly that disagreement is what this covers.
+describe("buildTrackGeometry winding", () => {
+  function triangleNormalY(position: THREE.BufferAttribute, triangleIndex: number): number {
+    const i = triangleIndex * 3;
+    const p0 = new THREE.Vector3().fromBufferAttribute(position, i);
+    const p1 = new THREE.Vector3().fromBufferAttribute(position, i + 1);
+    const p2 = new THREE.Vector3().fromBufferAttribute(position, i + 2);
+    const normal = new THREE.Vector3().subVectors(p1, p0).cross(new THREE.Vector3().subVectors(p2, p0));
+    return normal.y;
+  }
+
+  it.each(Object.values(TRACK_PRESETS))(
+    "every road/kerb/reference-line/finish-marker triangle in track $id faces world +Y by real winding",
+    (trackParams) => {
+      const group = buildTrackGeometry(trackParams);
+      let triangleCount = 0;
+      group.traverse((node) => {
+        if (!(node instanceof THREE.Mesh)) return;
+        const position = node.geometry.getAttribute("position") as THREE.BufferAttribute;
+        const triangles = position.count / 3;
+        for (let t = 0; t < triangles; t++) {
+          expect(triangleNormalY(position, t)).toBeGreaterThan(0);
+          triangleCount++;
+        }
+      });
+      // Sanity check that this test actually walked real geometry, not an
+      // empty group that would trivially "pass" with zero assertions.
+      expect(triangleCount).toBeGreaterThan(0);
+    },
+  );
+});
+
+describe("track layer heights", () => {
+  it("keeps road, kerb, reference-line, and finish-marker at distinct, strictly ascending heights, with the road never coplanar with the ground (world Y=0)", () => {
+    expect(ROAD_LIFT_METERS).toBeGreaterThan(0);
+    expect(KERB_LIFT_METERS).toBeGreaterThan(ROAD_LIFT_METERS);
+    expect(REFERENCE_LIFT_METERS).toBeGreaterThan(KERB_LIFT_METERS);
+    expect(FINISH_LIFT_METERS).toBeGreaterThan(REFERENCE_LIFT_METERS);
   });
 });

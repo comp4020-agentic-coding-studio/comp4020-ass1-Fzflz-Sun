@@ -54,3 +54,21 @@ verified the select-then-Run flow at both viewports. The no-real-time-input rule
 was retained in the harness to prevent the confound returning.
 
 [`201cd58`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-Fzflz-Sun/commit/201cd5872372625f4d8cb8e0206b2d3c4481b95a)
+
+### 4. Changing the rendering substrate, not polishing the billboard
+
+The pinhole Canvas pass made distance shrink correctly, but the car was still
+a screen-space billboard and the scene had no vertical parallax cues. The
+obvious response was another round of drawing detail and camera tuning.
+Instead, I reversed my earlier no-WebGL rule and replaced only the rendering
+layer with Three.js, keeping the deterministic simulation and semantic DOM
+untouched. I selected a small CC0 Kenney subset rather than importing whole
+packs, inspected the sedan scene graph to confirm its wheel nodes and forward
+axis, and recorded every retained asset and licence. Existing simulation and
+viewport tests remaining green showed that the experiment contract had
+survived the replacement; browser review then confirmed that a real chassis
+could make body heading diverge visibly from travel direction. I treated this
+as a rendering-foundation correction rather than claiming the visual polish
+was finished.
+
+[`266590e...20b1d94`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-Fzflz-Sun/compare/266590e7df72facbc61727ed23b325ad45710a23...20b1d9407dbda97602d5d4a1984ab6ac47e52229)

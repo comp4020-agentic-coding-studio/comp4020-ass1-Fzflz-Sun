@@ -11,6 +11,7 @@ import {
 import { simToWorld } from "./coordinates.ts";
 import { buildScenery, buildStaticEnvironment, FOG_FAR_METERS, FOG_NEAR_METERS } from "./environment.ts";
 import { FRONT_COLOR, REAR_COLOR, SKY_HORIZON_COLOR, wheelColor } from "./materials.ts";
+import { SCENE_SCALE } from "./scene-scale.ts";
 import { buildTrackGeometry } from "./track-geometry.ts";
 import { axleWorldPoints, loadVehicle, type Vehicle } from "./vehicle.ts";
 
@@ -27,9 +28,21 @@ import { axleWorldPoints, loadVehicle, type Vehicle } from "./vehicle.ts";
 // vertical-FOV-in-degrees convention, aspect-independent) reproduces the same
 // framing the old renderer tuned, without needing a viewport-height-relative
 // focal length at all — Three.js's projection matrix already handles that.
-const CAMERA_HEIGHT_METERS = 2.2;
+//
+// CAMERA_HEIGHT_METERS and CHASE_DISTANCE_METERS below are each a *base*
+// figure multiplied by SCENE_SCALE (see scene-scale.ts) — not a coincidence
+// of naming, a deliberate similarity transform: scaling the camera's own
+// eye height and follow distance by the same factor the vehicle itself was
+// scaled by keeps the car occupying the same fraction of the frame it did
+// before that fix (a small-angle argument: the angle subtended by an object
+// of size s at distance d is ~s/d, which is scale-invariant under s->k*s,
+// d->k*d). Pitch and FOV are angles, not lengths, so they need no such
+// scaling — verified by the same small-angle argument, and by an actual
+// screenshot comparison (see PROCESS.md-adjacent verification) rather than
+// assumed from the algebra alone.
+const CAMERA_HEIGHT_METERS = 2.2 * SCENE_SCALE;
 const CAMERA_PITCH_RADIANS = 0.22;
-const CHASE_DISTANCE_METERS = 6;
+const CHASE_DISTANCE_METERS = 6 * SCENE_SCALE;
 const FOCAL_LENGTH_TO_VIEWPORT_HEIGHT_RATIO = 1.15;
 const CAMERA_VERTICAL_FOV_RADIANS = 2 * Math.atan(1 / (2 * FOCAL_LENGTH_TO_VIEWPORT_HEIGHT_RATIO));
 const CAMERA_NEAR_METERS = 0.1;
@@ -37,6 +50,15 @@ const CAMERA_FAR_METERS = FOG_FAR_METERS + 40; // a little past where fog has al
 
 const MAX_DEVICE_PIXEL_RATIO = 2;
 const TRAIL_MAX_POINTS = 40;
+// Deliberately NOT scaled by SCENE_SCALE, unlike the vehicle/camera figures
+// above. recordTrail() pushes a new dot every update() call an axle stays
+// saturated — at typical run speeds that's roughly 0.2m between consecutive
+// dots — and every pooled dot sits at the same world Y (TRAIL_LIFT_METERS),
+// unsorted, alpha-blended. Scaling this radius up by ~2x once made
+// consecutive dots overlap ~3x instead of ~1.5x, which visibly banded into a
+// solid "stacked rings" column under grazing chase-camera angles instead of
+// a legible skid mark — worse than the mismatch-vs-wheel-size this scaling
+// was meant to avoid. Confirmed by screenshot comparison, not algebra alone.
 const TRAIL_DOT_RADIUS_METERS = 0.16;
 const TRAIL_LIFT_METERS = 0.05;
 
@@ -83,14 +105,35 @@ function disposeGroup(group: THREE.Group, disposeGeometries: boolean): void {
  * under Vitest, or a browser with WebGL disabled); `main.ts` already catches
  * that so a canvas-less browser still gets the full instrument-panel
  * explanation (CLAUDE.md: DOM state is the non-visual truth, the canvas is
- * not required for the interaction to be legible). The canvas stays blank
- * until the vehicle and the first track's scenery have both finished loading
- * — the same "no interface change, update() is a no-op until ready" contract
- * the plan calls for. */
+ * not required for the interaction to be legible). The road/kerb/reference/
+ * finish geometry is synchronous, procedural `BufferGeometry` (see
+ * `track-geometry.ts`) — it appears on the very first `update()` call
+ * regardless of track direction, with no network round-trip to wait on. The
+ * vehicle and each track's scattered scenery are the only asynchronous
+ * parts: they load in the background and join the scene the moment they
+ * resolve (`loadVehicle().then(...)`, `buildScenery(track).then(...)`
+ * below), each with its own `.catch()` so a failed decorative asset load
+ * never breaks the road, the other asset, or the rest of the scene. */
 export function createGripScene(canvas: HTMLCanvasElement): GripScene {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // Explicit, not relied-on-default: sedan.glb's colormap.png is an sRGB
+  // asset (the GLTF convention every glTF loader assumes for colour
+  // textures), so the renderer must decode it back out of sRGB before
+  // lighting math and re-encode the final frame into sRGB for display —
+  // otherwise the whole scene either double-encodes (washed out, "toy-like"
+  // flat colours) or reads linear values as sRGB (crushed near-black
+  // shadows). ACESFilmicToneMapping rolls off the sun/hemisphere/ambient
+  // rig's highlights instead of hard-clipping them, which is what keeps
+  // paint/glass/light accents on the car legible at dusk instead of blowing
+  // out or collapsing to flat colour. Exposure tuned by eye against real
+  // screenshots (see PROCESS.md-adjacent verification, not hex-value
+  // reasoning) so the road/kerb/reference-line contrast and the car's paint
+  // stay readable without the sky dome blowing out.
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.15;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(SKY_HORIZON_COLOR);
@@ -115,10 +158,14 @@ export function createGripScene(canvas: HTMLCanvasElement): GripScene {
   let rebuildGeneration = 0;
 
   let vehicle: Vehicle | null = null;
-  loadVehicle().then((loaded) => {
-    vehicle = loaded;
-    scene.add(loaded.root);
-  });
+  loadVehicle()
+    .then((loaded) => {
+      vehicle = loaded;
+      scene.add(loaded.root);
+    })
+    .catch((error: unknown) => {
+      console.error("failed to load the vehicle model", error);
+    });
 
   function rebuildTrack(trackId: TrackId): void {
     if (trackId === currentTrackId) return;
@@ -134,21 +181,30 @@ export function createGripScene(canvas: HTMLCanvasElement): GripScene {
     trackGroup = buildTrackGeometry(track);
     scene.add(trackGroup);
 
-    buildScenery(track).then((built) => {
-      if (generation !== rebuildGeneration) {
-        // Superseded by a later track switch (or the scene was disposed)
-        // while this scatter was still loading — discard it instead of
-        // adding stale scenery on top of whatever's current now.
-        disposeGroup(built, false);
-        return;
-      }
-      if (sceneryGroup) {
-        scene.remove(sceneryGroup);
-        disposeGroup(sceneryGroup, false);
-      }
-      sceneryGroup = built;
-      scene.add(built);
-    });
+    buildScenery(track)
+      .then((built) => {
+        if (generation !== rebuildGeneration) {
+          // Superseded by a later track switch (or the scene was disposed)
+          // while this scatter was still loading — discard it instead of
+          // adding stale scenery on top of whatever's current now.
+          disposeGroup(built, false);
+          return;
+        }
+        if (sceneryGroup) {
+          scene.remove(sceneryGroup);
+          disposeGroup(sceneryGroup, false);
+        }
+        sceneryGroup = built;
+        scene.add(built);
+      })
+      .catch((error: unknown) => {
+        // buildScenery's own placeInstance already swallows a single
+        // failed asset load (see environment.ts), so this only fires on
+        // something unexpected — still caught here rather than left to
+        // reject silently, per the same "every async GLB load has an
+        // explicit error path" discipline.
+        console.error("failed to build track scenery", error);
+      });
   }
 
   const trailPool: TrailSlot[] = [];
