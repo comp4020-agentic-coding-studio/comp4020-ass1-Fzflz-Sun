@@ -59,6 +59,21 @@ for (const viewport of VIEWPORTS) {
       ).toBeLessThanOrEqual(viewport.width);
     });
 
+    test("renders the 3D stage visibly on first load, before Run is ever pressed", async ({ page }) => {
+      // main.ts's render loop calls scene.update() every frame regardless of
+      // run phase, so the chase-cam stage (car/track/environment) is meant to
+      // be visible immediately on load, not only once a run starts — this
+      // asserts that real, working behaviour rather than assuming it from the
+      // absence of a console error.
+      await page.goto("/");
+      const canvas = page.getByTestId("scene-canvas");
+      await expect(canvas).toBeVisible();
+      const box = await canvas.boundingBox();
+      expect(box, "scene canvas must have a real, measurable box on first paint").not.toBeNull();
+      expect(box!.width).toBeGreaterThan(0);
+      expect(box!.height).toBeGreaterThan(0);
+    });
+
     test("the car sits at rest until Run is pressed, even while changing settings", async ({ page }) => {
       await page.goto("/");
       await page.getByTestId("reset").click();

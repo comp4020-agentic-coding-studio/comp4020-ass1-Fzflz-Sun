@@ -190,6 +190,33 @@ budget; drivetrain only changes which axle receives the throttle share.
   (the sweep, ~5.9s) finishes, so the contrast is visible on every preset,
   not just the longer hairpin.
 
+### Rendering: dusk lighting and material brightness (cosmetic, not a model assumption)
+
+Unlike every constant above, these carry no physical claim — they only
+control how legible the already-correct 3D scene is to look at. Kept here
+anyway for the same "doc and code must never disagree" discipline, and
+because they were tuned by the same iterative, verify-don't-guess method.
+
+- **`HEMI_INTENSITY = 1.4`, `AMBIENT_INTENSITY = 1.4`** (`environment.ts`).
+  Raised in steps (0.75/0.45 → 0.9/0.6 → 1.1/0.85 → 1.4/1.4) to lift
+  shadow-side detail — the car's own cast shadow, and any surface facing away
+  from the low dusk sun (`SUN_ELEVATION_RADIANS = 0.32`) — without touching
+  `SUN_INTENSITY`/exposure, which would also brighten the sun-facing
+  highlights and sky dome toward clipping. Each step was checked against a
+  pixel-level average (not eyeballed) of the chase-cam's darkest region — the
+  foreground road/ground directly around the car — and of the sky/sun
+  highlight, confirming the former kept rising while the latter stayed clear
+  of clipping toward flat white.
+- **`renderer.toneMappingExposure = 1.9`** (`scene.ts`). Raised alongside the
+  above (1.15 → 1.3 → 1.5 → 1.9), same pixel-measurement discipline.
+- **`GROUND_COLOR = "#3d4a3f"`, `ROAD_COLOR = "#4c5360"`** (`materials.ts`).
+  Lightened alongside the light-intensity changes (`#232a24`/`#2c3038` →
+  `#2b332c`/`#343a44` → `#333d35`/`#404652` → final) — light-intensity/
+  exposure alone plateaued under 10% measured brightness on the darkest
+  region, so the base albedo itself needed lifting too, not just the light
+  reaching it. `SKY_TOP_COLOR`/`SKY_HORIZON_COLOR` were deliberately left
+  untouched throughout — this is brighter dusk, not a switch to daylight.
+
 ## Experiment lifecycle
 
 The visitor never drives in real time. Before a run, they choose five

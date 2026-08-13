@@ -202,3 +202,46 @@ describe("buildScenery", () => {
     }
   });
 });
+
+// buildStaticEnvironment is synchronous and has no async asset load to wait
+// on (sky dome, ground plane, and lights are all procedural/built-in), unlike
+// buildScenery above — this is exactly what makes the 3D stage visible on
+// first paint, before Run is pressed and before any vehicle/scenery asset
+// resolves (main.ts renders every frame regardless of run phase). These
+// tests assert that everything the first-painted frame needs is present the
+// instant this function returns, with no `await` required.
+describe("buildStaticEnvironment", () => {
+  it("synchronously returns a group containing a visible sky dome and ground mesh", async () => {
+    const { buildStaticEnvironment } = await import("./environment.ts");
+    const group = buildStaticEnvironment();
+
+    const dome = group.getObjectByName("sky-dome");
+    expect(dome).toBeInstanceOf(THREE.Mesh);
+
+    const ground = group.getObjectByName("ground");
+    expect(ground).toBeInstanceOf(THREE.Mesh);
+    expect((ground as THREE.Mesh).receiveShadow).toBe(true);
+  });
+
+  it("includes the full dusk light rig — sun (with its target), hemisphere, and ambient — with no light disabled by omission", async () => {
+    const { buildStaticEnvironment } = await import("./environment.ts");
+    const group = buildStaticEnvironment();
+
+    const sunLights = group.children.filter((child): child is THREE.DirectionalLight => child instanceof THREE.DirectionalLight);
+    expect(sunLights.length).toBe(1);
+    const [sun] = sunLights;
+    expect(sun.castShadow).toBe(true);
+    // The sun's target must be part of the same returned group, not left
+    // dangling — a DirectionalLight with no reachable target defaults to
+    // aiming at the world origin, which happens to be close to correct here
+    // only by coincidence of where the track starts; asserting the real
+    // target object is present rules out relying on that coincidence.
+    expect(group.children).toContain(sun.target);
+
+    const hemisphereLights = group.children.filter((child) => child instanceof THREE.HemisphereLight);
+    expect(hemisphereLights.length).toBe(1);
+
+    const ambientLights = group.children.filter((child) => child instanceof THREE.AmbientLight);
+    expect(ambientLights.length).toBe(1);
+  });
+});

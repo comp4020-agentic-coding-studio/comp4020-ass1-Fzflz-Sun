@@ -99,4 +99,19 @@ describe("loadVehicle", () => {
     // future refactor that accidentally hardcodes 1 fails this test.
     expect(VEHICLE_SCALE).toBeGreaterThan(1.5);
   });
+
+  it("orients the root from state.heading via the shared sedan heading formula, not a bare copy", async () => {
+    const { loadVehicle } = await import("./vehicle.ts");
+    const { createInitialState } = await import("../simulation/index.ts");
+    const { sedanHeadingToWorldRotationY } = await import("./coordinates.ts");
+
+    const vehicle = await loadVehicle();
+    const state = createInitialState();
+
+    for (const heading of [0, Math.PI / 2, -Math.PI / 2, 1.23456]) {
+      state.heading = heading;
+      vehicle.update(state);
+      expect(vehicle.root.rotation.y).toBeCloseTo(sedanHeadingToWorldRotationY(heading), 10);
+    }
+  });
 });

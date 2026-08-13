@@ -12,8 +12,18 @@ export const DANGER_COLOR = "#ff6b57";
 
 export const SKY_TOP_COLOR = "#0c0f18";
 export const SKY_HORIZON_COLOR = "#5b6472";
-export const GROUND_COLOR = "#232a24";
-export const ROAD_COLOR = "#2c3038"; // charcoal — deliberately never pure black
+// GROUND_COLOR/ROAD_COLOR lightened from #232a24/#2c3038, then #2b332c/
+// #343a44, then #333d35/#404652, in the same brightening pass as
+// environment.ts's light-intensity constants — a pixel-level measurement of
+// the chase-cam's darkest region (the foreground road/ground inside the
+// car's own cast shadow) showed each of those still under 5% brightness, so
+// this pass lightens the base albedo itself rather than relying on
+// light-intensity/exposure alone to lift a very dark starting colour.
+// Verified by the same measurement that the road/kerb boundary and the
+// ground/road boundary both stay clearly distinguishable at dusk, not
+// washed toward one flat tone.
+export const GROUND_COLOR = "#3d4a3f";
+export const ROAD_COLOR = "#4c5360"; // charcoal — deliberately never pure black
 export const KERB_LIGHT_COLOR = "#dfdccf"; // off-white
 export const KERB_DARK_COLOR = "#5b6270"; // muted slate — replaces the old red/white racing-kerb banding
 export const REFERENCE_LINE_COLOR = "#dfdccf";

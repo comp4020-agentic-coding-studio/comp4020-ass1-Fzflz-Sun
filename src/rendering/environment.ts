@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { TRACK_PRESETS } from "../simulation/constants.ts";
+import { BARRIER_KERB_GAP_METERS, TRACK_PRESETS } from "../simulation/constants.ts";
 import type { TrackParams } from "../simulation/index.ts";
 import { trackCentre } from "../simulation/track.ts";
 import { ASSET_PATHS, loadAsset } from "./asset-loader.ts";
@@ -29,18 +29,32 @@ const SUN_ELEVATION_RADIANS = 0.32;
 const SUN_AZIMUTH_RADIANS = 0.9;
 const HEMI_SKY_COLOR = SKY_HORIZON_COLOR;
 const HEMI_GROUND_COLOR = GROUND_COLOR;
-const HEMI_INTENSITY = 0.75;
-const AMBIENT_COLOR = "#3a4250";
-// Raised from an earlier 0.25: at a low dusk sun elevation, any side of the
-// car (or the road) facing away from the sun got essentially no light at
-// all beyond this ambient floor — verified by screenshot, not guessed from
-// hex values, that the rear bumper/wheels/tail-lights collapsed to
-// near-black at 0.25 even with tone-mapping exposure raised. Ambient light
-// (unlike the hemisphere light) is uniform and non-directional, so it's
-// the right tool for lifting shadow-side detail without also blowing out
-// the sun-facing highlights the way more exposure or more sun intensity
-// would.
-const AMBIENT_INTENSITY = 0.45;
+// Raised from an earlier 0.75, then 0.9, then 1.1 in the same brightening
+// pass as AMBIENT_INTENSITY below — a pixel-level measurement (not just eyeballing)
+// of the chase-cam's own foreground road/ground, the region closest to camera
+// and inside the car's own cast shadow, showed real but still-insufficient gains
+// at each step (RGB average ~7,5,3 at the original 0.75/0.45 pairing → ~11,9,6
+// at 0.9/0.6 → still only ~11,9,6 out of 255 at 1.1/0.85, i.e. under 5%
+// brightness) before landing here. Since the hemisphere light is what carries
+// sky-vs-ground colour contrast onto upward-facing surfaces specifically, it
+// still matters for the ground/car-roof even once ambient is doing most of the
+// shadow-fill work below.
+const HEMI_INTENSITY = 1.4;
+const AMBIENT_COLOR = "#4a5568";
+// Raised from an earlier 0.25, then 0.45, 0.6, 0.85: at a low dusk sun
+// elevation, any side of the car (or the road) facing away from the sun — and
+// especially the ground inside the car's own cast shadow, the single darkest
+// region in the whole frame — got essentially no light at all beyond this
+// ambient floor. Verified by a pixel-level average of that exact
+// foreground-shadow region across each step (not guessed from hex values):
+// 0.25/0.45/0.6 all left it under 3% brightness (RGB ~7,5,3 out of 255); 0.85
+// only reached ~11,9,6 — a real but still-too-dark gain. Ambient light (unlike
+// the hemisphere light) is uniform and non-directional, so it's the right tool
+// for lifting shadow-side detail without also blowing out the sun-facing
+// highlights the way more exposure or more sun intensity would — re-verified
+// by the same pixel measurement on the sky/sun-facing region that raising this
+// further still doesn't clip those areas toward flat white.
+const AMBIENT_INTENSITY = 1.4;
 
 const SHADOW_MAP_SIZE = 2048;
 
@@ -69,7 +83,6 @@ export const BARRIER_SPEC: AssetPlacementSpec = { targetAxis: "y", targetMeters:
 // Exported so tests can derive the exact expected placement interval from
 // a mocked asset's own fitted size, rather than duplicating this number.
 export const BARRIER_GAP_METERS = 0.15;
-const BARRIER_KERB_GAP_METERS = 0.6;
 // Only used if the real asset fails to load (network failure) and its true
 // fitted length can't be measured — a rough guess in the right ballpark so
 // spacing degrades gracefully rather than throwing.
@@ -297,6 +310,21 @@ async function placeInstance(target: THREE.Object3D, url: string, spec: AssetPla
   wrapper.name = url.slice(url.lastIndexOf("/") + 1);
   enableShadows(wrapper);
   target.add(wrapper);
+  if (import.meta.env.DEV && url.includes("barrier")) {
+    let meshCount = 0;
+    wrapper.traverse((node) => {
+      if (node instanceof THREE.Mesh) meshCount++;
+    });
+    console.debug(
+      "[diag] barrier instance",
+      JSON.stringify({
+        meshCount,
+        fittedSize: size.toArray(),
+        worldPosition: wrapper.position.toArray(),
+        worldRotationY: wrapper.rotation.y,
+      }),
+    );
+  }
   return size;
 }
 

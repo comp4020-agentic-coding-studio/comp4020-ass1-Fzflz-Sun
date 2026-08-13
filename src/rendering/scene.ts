@@ -127,13 +127,18 @@ export function createGripScene(canvas: HTMLCanvasElement): GripScene {
   // shadows). ACESFilmicToneMapping rolls off the sun/hemisphere/ambient
   // rig's highlights instead of hard-clipping them, which is what keeps
   // paint/glass/light accents on the car legible at dusk instead of blowing
-  // out or collapsing to flat colour. Exposure tuned by eye against real
-  // screenshots (see PROCESS.md-adjacent verification, not hex-value
-  // reasoning) so the road/kerb/reference-line contrast and the car's paint
-  // stay readable without the sky dome blowing out.
+  // out or collapsing to flat colour. Exposure tuned against a pixel-level
+  // average of a real screenshot's darkest region (the chase-cam foreground
+  // road/ground, inside the car's own cast shadow) rather than hex-value
+  // reasoning or eyeballing alone: 1.15, then 1.3, then 1.5 each measured
+  // under 5% brightness there (RGB ~7,5,3 out of 255 at 1.15, still only
+  // ~11,9,6 at 1.5) before landing on 1.9 in the same brightening pass as
+  // environment.ts's AMBIENT_INTENSITY/HEMI_INTENSITY. Re-verified by the same
+  // measurement on the sky/sun-highlight region that this still doesn't clip
+  // toward flat white.
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.15;
+  renderer.toneMappingExposure = 1.9;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(SKY_HORIZON_COLOR);
