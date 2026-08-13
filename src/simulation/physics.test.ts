@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  BARRIER_COLLISION_LIMIT_METERS,
+  CAR_HALF_WIDTH_METERS,
   CAR_PARAMS,
   DEFAULT_TRACK_ID,
   DRY_BASELINE_STEERING_FRACTION,
@@ -8,9 +10,18 @@ import {
   SURFACE_PRESETS,
   TRACK_PRESETS,
 } from "./constants.ts";
-import { controlsAtElapsed } from "./inputs.ts";
+import { controlsForState } from "./inputs.ts";
 import { createInitialState, shouldFinish, startRun, step } from "./physics.ts";
-import type { ControlInputs, DrivetrainId, SimState, SurfaceId, TrackId } from "./types.ts";
+import { trackCentre } from "./track.ts";
+import type {
+  ControlInputs,
+  DrivetrainId,
+  SimState,
+  SurfaceId,
+  ThrottleIntensityId,
+  ThrottleTimingId,
+  TrackId,
+} from "./types.ts";
 
 // Drives `n` fixed steps with the same controls each step, returning the
 // final state. Used throughout to push the car hard enough into a corner to
@@ -139,6 +150,52 @@ describe("saturation states", () => {
   });
 });
 
+describe("outer-track barrier collision", () => {
+  const track = TRACK_PRESETS[DEFAULT_TRACK_ID];
+  const { cx, cy } = trackCentre(track);
+  const maxDist = track.radius + BARRIER_COLLISION_LIMIT_METERS - CAR_HALF_WIDTH_METERS;
+
+  // Sitting exactly on the boundary at the point where the outward radial
+  // direction is world +x (so heading 0 = facing straight into the wall),
+  // moving forward fast enough to breach it in a single step if nothing
+  // intervened.
+  function stateAtBoundary(overrides: Partial<SimState> = {}): SimState {
+    return {
+      ...createInitialState(),
+      phase: "running",
+      x: cx + maxDist,
+      y: cy,
+      heading: 0,
+      vx: 15,
+      vy: 0,
+      ...overrides,
+    };
+  }
+
+  it("never lets sustained hard driving push the car's distance from the track centre past the boundary", () => {
+    let state = startedRun("FWD", "dry");
+    for (let i = 0; i < 400; i++) {
+      state = step(state, HARD_RIGHT_FULL_THROTTLE, FIXED_TIMESTEP);
+      const distance = Math.hypot(state.x - cx, state.y - cy);
+      expect(distance).toBeLessThanOrEqual(maxDist + 1e-6);
+    }
+  });
+
+  it("rebounds the impact-normal velocity backward instead of merely zeroing it", () => {
+    const after = step(stateAtBoundary(), STRAIGHT_NO_INPUT, FIXED_TIMESTEP);
+    // A pure "stop at the wall" clamp would leave this at (or above) zero; a
+    // real reaction-force rebound sends it negative — moving back away from
+    // the wall, not just halted.
+    expect(after.vx).toBeLessThan(0);
+  });
+
+  it("a grippier surface bleeds off more along-the-wall scrape speed on impact than an icy one", () => {
+    const onDry = step(stateAtBoundary({ surface: "dry", vy: 8 }), STRAIGHT_NO_INPUT, FIXED_TIMESTEP);
+    const onIce = step(stateAtBoundary({ surface: "ice", vy: 8 }), STRAIGHT_NO_INPUT, FIXED_TIMESTEP);
+    expect(Math.abs(onDry.vy)).toBeLessThan(Math.abs(onIce.vy));
+  });
+});
+
 describe("reset", () => {
   it("returns to the same deterministic initial state every time", () => {
     const a = createInitialState("AWD", "wet");
@@ -174,47 +231,74 @@ describe("determinism", () => {
     expect(run()).toEqual(run());
   });
 
-  it("controlsAtElapsed is a pure function of its inputs (no hidden time source)", () => {
+  it("controlsForState is a pure function of its inputs (no hidden time source)", () => {
     function runAt(elapsed: number): ControlInputs {
-      return controlsAtElapsed(elapsed, "full", "mid", CAR_PARAMS);
+      const state: SimState = { ...createInitialState("RWD", "dry", "full", "mid"), elapsed };
+      return controlsForState(state, CAR_PARAMS, FIXED_TIMESTEP);
     }
 
     expect(runAt(3)).toEqual(runAt(3));
   });
 });
 
-describe("controlsAtElapsed", () => {
+describe("controlsForState", () => {
+  // Throttle depends only on `state.elapsed`/throttleIntensity/throttleTiming,
+  // not position or heading, so a fixture built straight from
+  // createInitialState (car sitting exactly on the reference line) with just
+  // `elapsed` overridden is enough to isolate it from the steering law below.
+  function stateAt(
+    elapsed: number,
+    throttleIntensity: ThrottleIntensityId,
+    throttleTiming: ThrottleTimingId,
+  ): SimState {
+    return { ...createInitialState("RWD", "dry", throttleIntensity, throttleTiming), elapsed };
+  }
+
   it("ramps throttle up smoothly instead of jumping to full on the first elapsed step, once past its timing threshold", () => {
-    const afterOneStep = controlsAtElapsed(FIXED_TIMESTEP, "full", "early", CAR_PARAMS);
+    const afterOneStep = controlsForState(stateAt(FIXED_TIMESTEP, "full", "early"), CAR_PARAMS, FIXED_TIMESTEP);
     expect(afterOneStep.throttle).toBeGreaterThan(0);
     expect(afterOneStep.throttle).toBeLessThan(1);
   });
 
   it("reaches the selected intensity fraction after enough elapsed time, then stays clamped there", () => {
-    const wellPastRampTime = controlsAtElapsed(100, "full", "early", CAR_PARAMS);
+    const wellPastRampTime = controlsForState(stateAt(100, "full", "early"), CAR_PARAMS, FIXED_TIMESTEP);
     expect(wellPastRampTime.throttle).toBe(1);
   });
 
   it("holds throttle at exactly 0 before the timing threshold is reached", () => {
-    const before = controlsAtElapsed(2, "full", "late", CAR_PARAMS);
+    const before = controlsForState(stateAt(2, "full", "late"), CAR_PARAMS, FIXED_TIMESTEP);
     expect(before.throttle).toBe(0);
   });
 
-  it("ramps steering in smoothly from 0 at the start of a run rather than snapping to the baseline", () => {
-    const atStart = controlsAtElapsed(0, "medium", "early", CAR_PARAMS);
-    expect(atStart.steering).toBe(0);
+  it("ramps steering in smoothly from 0 at the start of a run rather than snapping straight to the target", () => {
+    // The default track (sweep-right) is calibrated so its feedforward
+    // target equals DRY_BASELINE_STEERING_FRACTION in magnitude (see
+    // constants.ts) — the car starts exactly on the reference line heading
+    // exactly along its tangent, so at the very first step the only nonzero
+    // contribution to the steering target is that feedforward term.
+    const state0 = startRun(createInitialState());
+    expect(state0.steering).toBe(0);
 
-    const afterOneStep = controlsAtElapsed(FIXED_TIMESTEP, "medium", "early", CAR_PARAMS);
-    expect(Math.abs(afterOneStep.steering)).toBeGreaterThan(0);
-    expect(Math.abs(afterOneStep.steering)).toBeLessThan(DRY_BASELINE_STEERING_FRACTION);
+    const firstStepControls = controlsForState(state0, CAR_PARAMS, FIXED_TIMESTEP);
+    const maxFirstStepDelta = CAR_PARAMS.steerRampPerSecond * FIXED_TIMESTEP;
+    expect(Math.abs(firstStepControls.steering)).toBeGreaterThan(0);
+    expect(Math.abs(firstStepControls.steering)).toBeLessThanOrEqual(maxFirstStepDelta + 1e-9);
 
-    const wellPastRampTime = controlsAtElapsed(100, "medium", "early", CAR_PARAMS);
-    expect(wellPastRampTime.steering).toBeCloseTo(-DRY_BASELINE_STEERING_FRACTION, 6);
+    // Driven for a full second, steering has had ample time to ramp in and
+    // settle close to the track's own calibrated feedforward target rather
+    // than staying pinned near the single-step delta above.
+    let state = state0;
+    for (let i = 0; i < Math.round(1 / FIXED_TIMESTEP); i++) {
+      const controls = controlsForState(state, CAR_PARAMS, FIXED_TIMESTEP);
+      state = step(state, controls, FIXED_TIMESTEP);
+    }
+    expect(Math.abs(state.steering)).toBeGreaterThan(DRY_BASELINE_STEERING_FRACTION * 0.5);
+    expect(Math.abs(state.steering)).toBeLessThanOrEqual(1);
   });
 
   it("brake is always 0 — braking is out of scope for the discrete-run redesign", () => {
-    expect(controlsAtElapsed(0, "full", "early", CAR_PARAMS).brake).toBe(0);
-    expect(controlsAtElapsed(100, "full", "early", CAR_PARAMS).brake).toBe(0);
+    expect(controlsForState(stateAt(0, "full", "early"), CAR_PARAMS, FIXED_TIMESTEP).brake).toBe(0);
+    expect(controlsForState(stateAt(100, "full", "early"), CAR_PARAMS, FIXED_TIMESTEP).brake).toBe(0);
   });
 });
 
@@ -252,8 +336,7 @@ describe("finish condition is position-based, not duration-based", () => {
     let state = startRun(createInitialState("RWD", "dry", throttleIntensity, "early", track));
     const capSteps = Math.round(SAFETY_CAP_SECONDS / FIXED_TIMESTEP);
     for (let i = 0; i < capSteps; i++) {
-      const trackParams = TRACK_PRESETS[state.track];
-      const controls = controlsAtElapsed(state.elapsed, throttleIntensity, "early", CAR_PARAMS, trackParams);
+      const controls = controlsForState(state, CAR_PARAMS, FIXED_TIMESTEP);
       state = step(state, controls, FIXED_TIMESTEP);
       if (shouldFinish(state)) return state;
     }

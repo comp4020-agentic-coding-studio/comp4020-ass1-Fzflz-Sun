@@ -96,14 +96,19 @@ untouched, either the job was tiny or nobody read it.
   driving, not through the underlying maths, and says plainly that it is a
   simplified teaching model, not professional driving instruction.
 - **Explicitly excluded**: a run-history or compare-across-runs UI; lap
-  timing; other traffic or collisions; cockpit view; gear/clutch simulation;
+  timing; other traffic; cockpit view; gear/clutch simulation;
   ABS/ESC/TC; tyre temperature/wear; suspension, differential, or aero
   tuning; detailed dynamic weight transfer (front/rear normal load is fixed
   and symmetric); real vehicle makes or performance claims; downloaded 3D
   models; a long-form tutorial. (Multiple tracks/corners is *not* excluded —
   four fixed presets exist, chosen from a picker before a run, same as the
   other settings; there is no free-form track editor or arbitrary corner
-  geometry.) Full exclusion list and rationale in the top-level assignment
+  geometry.) Colliding with *other traffic* is excluded, but colliding with
+  the track's own outer barrier is not: running wide enough to reach it
+  scrapes the car along the wall (radial position clamp, outward velocity
+  zeroed, tangential velocity kept) rather than clipping through — a
+  physical consequence of understeer/oversteer, not a second vehicle to
+  avoid. Full exclusion list and rationale in the top-level assignment
   brief this file narrows.
 - **Edge cases that matter**: keyboard-only operation (Tab between setting
   pickers and the Run/Reset buttons, Enter/Space to activate them — there is

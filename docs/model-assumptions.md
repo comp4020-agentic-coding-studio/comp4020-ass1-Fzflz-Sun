@@ -127,6 +127,48 @@ budget; drivetrain only changes which axle receives the throttle share.
   *not* the primary finish trigger — see `shouldFinish` in the lifecycle
   section below — sized comfortably above the slowest realistic traversal
   (the hairpin, ~8.7s expected).
+- **`CROSS_TRACK_GAIN = 0.08 /m` and `HEADING_GAIN = 1.5 /rad`.** The
+  closed-loop steering correction's two gains (see the Experiment lifecycle
+  section below for the full law) — starting values, hand-tuned while
+  driving rather than derived from a formula, same discipline as
+  `maxSteerAngle`. Deliberately kept low enough that saturation
+  (understeer/oversteer/slide) is still visibly reachable rather than being
+  corrected away outright.
+- **`CAR_HALF_WIDTH_METERS ≈ 1.48 m`** (`SEDAN_RAW_HALF_WIDTH_METERS (0.75) *
+  (2 * CAR_PARAMS.wheelbaseHalf) / 1.32`). Used only for the barrier boundary
+  below, never for the friction-circle model. Derived from a direct
+  measurement of the rendered sedan's own fitted bounding box (`vehicle.ts`'s
+  DEV bbox diagnostic), scaled the same way `scene-scale.ts`'s
+  `VEHICLE_SCALE` scales the whole model — physics must not depend on an
+  asynchronously-loaded glTF's measured size, so the raw half-width and the
+  wheelbase ratio are duplicated here rather than imported. Previously a
+  hand-picked "real-world half-width" of `0.9 m` that did not match the
+  actual rendered car (~1.48 m), which let the car's visible mesh poke past
+  the barrier's inner face while the physics-level boundary looked
+  satisfied — a real reported bug, not a hypothetical one.
+- **`BARRIER_HALF_THICKNESS_METERS = 0.42 m`.** Half of `environment.ts`'s
+  `BARRIER_FALLBACK_SIZE.z` (0.84 m). The real fitted barrier size is only
+  known asynchronously at render time (glTF load), but `step()` must stay
+  synchronous, so this is a documented constant kept in sync by comment with
+  `BARRIER_FALLBACK_SIZE`/`BARRIER_SPEC` — same discipline already used for
+  `FRONT_COLOR`/`REAR_COLOR` between `main.css` and `materials.ts`. Confirmed
+  against `environment.ts`'s own DEV diagnostic: the barrier's actual fitted
+  half-Z came back as `0.421875 m`, within 2mm of this constant — the
+  barrier side was not the source of the reported clipping, the car's
+  half-width above was.
+- **`BARRIER_COLLISION_LIMIT_METERS = ROAD_HALF_WIDTH + KERB_WIDTH_METERS +
+  BARRIER_KERB_GAP_METERS - BARRIER_HALF_THICKNESS_METERS ≈ 8.38 m`.** The
+  `pathOffset` value of the barrier's inner face, derived from the same
+  layout constants `src/rendering/track-geometry.ts` and `environment.ts`
+  use to place the road/kerb/barrier visually — relocated into
+  `constants.ts` as the single source of truth (`src/simulation/` never
+  imports from `src/rendering/`; the rendering files import these back). See
+  the Experiment lifecycle section below for how this becomes a physical
+  wall, not a render-only check.
+- **`BARRIER_RESTITUTION = 0.35`, `BARRIER_IMPACT_FRICTION_FACTOR = 0.5`.**
+  The outer barrier's collision *response* (see the Experiment lifecycle
+  section below): starting values, hand-tuned while driving, same discipline
+  as `CROSS_TRACK_GAIN`/`HEADING_GAIN`.
 - **`THROTTLE_INTENSITY_PRESETS` (light `0.4`, medium `0.7`, full `1.0`,
   each a fraction of `maxEngineForce`).** Same discipline as
   `SURFACE_PRESETS` — a documented teaching ordering, not a claim about a
@@ -163,21 +205,69 @@ to a test that only checks utilisation percentages and state labels — see
 bug #5 below.
 
 Once running, the car's whole control input — steering *and* throttle — is
-computed by `controlsAtElapsed(elapsed, throttleIntensity, throttleTiming,
-params, track)` (`inputs.ts`): a pure, closed-form function of elapsed run
-time, not an iterative accumulation of held-button state. Steering always
-ramps toward the *selected track's own* fixed autosteer target
-(`track.autosteerFraction`, signed by `track.direction`) at
-`steerRampPerSecond`, from the instant the run starts — it is never a
-second variable the visitor adjusts directly (they only pick which track to
-autosteer around), so any behavioural difference between two runs is
-attributable to the settings that changed, not to how well the visitor
-steered. Throttle stays at exactly 0 until the selected timing threshold,
-then ramps toward the selected intensity fraction at `throttleRampPerSecond`.
-Brake is always 0 — braking is out of scope for this interaction model.
-Because both ramps are pure functions of elapsed time and the settings, the
-same (drivetrain, surface, intensity, timing, track) tuple reproduces
-bit-for-bit identical output on every run.
+computed by `controlsForState(state, params, dt)` (`inputs.ts`): a pure
+function of the current simulation state (position, heading, elapsed time,
+and the visitor's discrete settings), not an iterative accumulation of
+held-button state. The visitor never adjusts steering directly — they only
+pick which track to autosteer around — so any behavioural difference
+between two runs is still attributable to the settings that changed, not to
+how well the visitor steered.
+
+Steering is a **closed-loop correction toward the selected track's own
+reference arc**, a deliberate, explicitly-requested exception to this
+model's original "steering never reacts to the car's actual state" design
+(see `CLAUDE.md`). It sums three terms, clamps to `[-1, 1]`, then rate-limits
+the result from the *previous* actual `state.steering` at
+`steerRampPerSecond` (incrementally, since the target itself now moves every
+step rather than being a closed-form function of elapsed time alone):
+
+- **Feedforward** — `directionSign * track.autosteerFraction`, exactly the
+  fixed target the original design used, still the dominant term when the
+  car is tracking the line cleanly.
+- **Cross-track correction** — `directionSign * CROSS_TRACK_GAIN *
+  pathOffset(state.x, state.y, track)` (`constants.ts`): pulls the car back
+  toward the reference line when it has run wide or tucked in.
+- **Heading correction** — `HEADING_GAIN * headingError`, where
+  `headingError` is the wrapped difference between the arc's own tangent
+  heading at the car's current position and `state.heading`: corrects the
+  nose back toward the line's direction of travel after a slide has rotated
+  the chassis away from it.
+
+`CROSS_TRACK_GAIN` and `HEADING_GAIN` are starting values, hand-tuned while
+driving rather than derived — deliberately kept low enough that
+understeer/oversteer/slide saturation states are still visibly reachable and
+distinguishable (wheel tint, instruments, path offset) rather than being
+fully cancelled by the correction. A gain high enough to erase all
+saturation would defeat the model's own teaching purpose, so this is a
+judgement call re-checked by driving every drivetrain/surface/throttle
+combination known to saturate, not just by unit tests.
+
+Throttle is unchanged: it stays at exactly 0 until the selected timing
+threshold, then ramps toward the selected intensity fraction at
+`throttleRampPerSecond`. Brake is always 0 — braking is out of scope for
+this interaction model. Because `controlsForState` and `step` are both pure
+functions of their inputs — with no `Math.random()` and no wall-clock
+read — the same (drivetrain, surface, intensity, timing, track) tuple still
+reproduces bit-for-bit identical output on every run, even though steering
+now depends on the car's own trajectory rather than elapsed time alone.
+
+The car's outer boundary is likewise a physical consequence, not a cosmetic
+check: the road and its outer barrier are both defined relative to the same
+circular arc, so the barrier is a 1D radial limit on `pathOffset`
+(`BARRIER_COLLISION_LIMIT_METERS`, `constants.ts`) rather than literal 3D
+mesh collision. `step()` clamps the car's position back onto that boundary
+circle whenever it's exceeded, then applies a genuine reaction-force
+rebound rather than simply stopping dead: the outward-radial (impact-normal)
+component of velocity reverses at `BARRIER_RESTITUTION` of its impact speed,
+and the along-the-wall (tangential, "scrape") component is bled off by an
+amount that scales with the current surface's own grip (`mu`) via
+`BARRIER_IMPACT_FRICTION_FACTOR` — a grippier (dry) surface sheds more of
+that sliding speed on contact than an icy one, the same friction-is-relative
+spirit as the rest of this model. This applies unconditionally whenever
+`phase === "running"`, independent of the closed-loop steering above (a
+manually-driven car, if this model ever reopens real-time input, would hit
+the same wall the same way). It is not a hard stop or a new run-ending
+state — the run continues and still finishes normally via `shouldFinish`.
 
 A run reaches `"finished"` **positionally**, not after a fixed duration:
 each step accumulates `SimState.sweptAngle` (via `sweptAngleRate`,

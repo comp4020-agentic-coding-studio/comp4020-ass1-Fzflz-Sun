@@ -71,10 +71,24 @@ export const CAR_PARAMS: CarParams = {
 // hand-built ControlInputs fixtures (HARD_RIGHT_FULL_THROTTLE, STEER_ONLY)
 // still reference this constant directly, bypassing track calibration
 // entirely since they call step()/drive() without going through
-// controlsAtElapsed. Calibrated together with the default track's radius,
+// controlsForState. Calibrated together with the default track's radius,
 // wheelbaseHalf and ENTRY_SPEED (see maxSteerAngle's comment above) to track
 // the reference line on a dry surface.
 export const DRY_BASELINE_STEERING_FRACTION = 0.7;
+
+// Closed-loop steering correction gains (inputs.ts's controlsForState). The
+// steering law is feedforward (DRY_BASELINE_STEERING_FRACTION-style
+// autosteerFraction, unchanged) plus a cross-track term (this gain times
+// pathOffset) plus a heading term (this gain times heading error) — a
+// deliberate, user-directed exception to "steering never reacts to the car's
+// actual state" (see docs/model-assumptions.md and CLAUDE.md). Units: /m and
+// /rad respectively, since the sum is a steering fraction in [-1, 1] like
+// autosteerFraction. Starting values only — hand-tune while driving so the
+// correction visibly helps the car track the line without fully masking the
+// understeer/oversteer/slide saturation states the rest of this model exists
+// to teach (too high a gain corrects saturation away instead of showing it).
+export const CROSS_TRACK_GAIN = 0.08; // per metre of pathOffset
+export const HEADING_GAIN = 1.5; // per radian of heading error
 
 // Default track when a run/test doesn't pick one explicitly — reproduces the
 // original single-track prototype's exact geometry and autosteer target
@@ -147,6 +161,73 @@ export const TRACK_PRESETS: Record<TrackId, TrackParams> = {
     expectedTraversalSeconds: 8.7,
   },
 };
+
+// Road/kerb/barrier geometry, in metres, relative to each TRACK_PRESETS
+// entry's own radius. Lives here (not src/rendering/track-geometry.ts) so
+// physics.ts's outer-track collision boundary below and the renderer's road/
+// kerb/barrier placement (track-geometry.ts, environment.ts) share one
+// source of truth instead of two independently-drifting copies — simulation
+// never imports from rendering, so this has to be the shared side.
+export const ROAD_HALF_WIDTH = 7; // m, matches the previous 2D scene's road width
+export const KERB_WIDTH_METERS = 1.2;
+// Gap between the outer kerb edge and the barrier's own centreline
+// (environment.ts's barrierRadius placement formula) — purely a rendering
+// spacing choice, but the collision boundary below needs it too.
+export const BARRIER_KERB_GAP_METERS = 0.6;
+
+// sedan.glb's own raw half-width along its local X axis, measured directly
+// (vehicle.ts's DEV-only bbox diagnostic: fitted half-width came back as
+// 1.4772727...m at the current VEHICLE_SCALE, i.e. exactly 0.75m before that
+// scale is applied) — kept in sync BY HAND with scene-scale.ts's
+// VEHICLE_SCALE derivation (same discipline as BARRIER_HALF_THICKNESS_METERS
+// below; physics must not depend on an asynchronously-loaded glTF's measured
+// size, so this can't just import scene-scale.ts). The `1.32` below is
+// SEDAN_RAW_WHEELBASE_METERS (scene-scale.ts) — duplicated here for the same
+// reason. Previously a hand-picked "real-world half-width" of 0.9m that did
+// not match the actual rendered car (which is ~1.48m half-width once scaled
+// up to this model's 2.6m wheelbase): that mismatch let the car's visible
+// mesh poke past the barrier's inner face even while the physics-level
+// collision boundary looked satisfied — a real, reported bug, not a
+// hypothetical one.
+const SEDAN_RAW_HALF_WIDTH_METERS = 0.75;
+export const CAR_HALF_WIDTH_METERS = SEDAN_RAW_HALF_WIDTH_METERS * ((2 * CAR_PARAMS.wheelbaseHalf) / 1.32);
+
+// Half of the barrier asset's own fitted thickness (its local Z axis) —
+// must stay in sync BY HAND with BARRIER_FALLBACK_SIZE.z (currently 0.84) in
+// src/rendering/environment.ts. The real fitted size is only known
+// asynchronously once that asset's glTF loads, but step() below must stay
+// synchronous, so this is a plain documented constant rather than an import
+// from the renderer (same "kept in sync by comment" discipline as
+// FRONT_COLOR/REAR_COLOR between main.css and materials.ts). Cross-checked
+// directly against environment.ts's own DEV diagnostic this figure is meant
+// to track: the barrier's actual fitted Z came back as 0.84375m (half
+// 0.421875m) — within 2mm of this constant, i.e. not the source of any
+// reported clipping (see CAR_HALF_WIDTH_METERS above, which was).
+export const BARRIER_HALF_THICKNESS_METERS = 0.42;
+
+// The pathOffset (see track.ts) of the barrier's inner, collision-relevant
+// face — i.e. how far beyond a track's own `radius` the barrier's solid
+// surface actually sits. physics.ts's step() clamps the car so that
+// `pathOffset + CAR_HALF_WIDTH_METERS` never exceeds this, which keeps the
+// car's own body from passing through the barrier's visible model without
+// needing simulation to know anything about Three.js meshes.
+export const BARRIER_COLLISION_LIMIT_METERS =
+  ROAD_HALF_WIDTH + KERB_WIDTH_METERS + BARRIER_KERB_GAP_METERS - BARRIER_HALF_THICKNESS_METERS;
+
+// Outer-barrier collision *response* (see step(), physics.ts): a genuine
+// reaction-force rebound, not merely "stop dead at the wall". On impact the
+// car bounces back off the collision normal at this fraction of its impact
+// (normal) speed, and its along-the-wall "scrape" speed is bled off by an
+// amount that scales with the current surface's own grip
+// (SURFACE_PRESETS[state.surface].mu) — a grippier (dry) surface bites and
+// sheds more of that sliding speed on impact than an icy one, same
+// friction-is-relative spirit as the rest of this model. Both starting
+// values, same "hand-tune while driving" status as CROSS_TRACK_GAIN/
+// HEADING_GAIN above — and a deliberate, user-directed departure from a
+// pure inelastic "zero the outward velocity" clamp, which is what this used
+// to be.
+export const BARRIER_RESTITUTION = 0.35; // fraction of impact normal-speed that rebounds back off the wall
+export const BARRIER_IMPACT_FRICTION_FACTOR = 0.5; // scales how much of the along-wall scrape speed mu sheds on impact
 
 /** Illustrative relative grip presets. Real grip depends on tyre compound,
  * surface, temperature, water depth, ice thickness, load and setup — these

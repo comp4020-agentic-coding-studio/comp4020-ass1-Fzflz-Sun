@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as constants from "./constants.ts";
 import * as physics from "./physics.ts";
-import { controlsAtElapsed, NEUTRAL_CONTROLS } from "./inputs.ts";
+import { controlsForState, NEUTRAL_CONTROLS } from "./inputs.ts";
 import type {
   ControlInputs,
   DrivetrainId,
@@ -56,13 +56,12 @@ function startedRun(
 }
 
 // Drives a run using the real deterministic autosteer/throttle program
-// (controlsAtElapsed) instead of hand-built ControlInputs — this is what
+// (controlsForState) instead of hand-built ControlInputs — this is what
 // main.ts's frame loop actually calls, so these tests exercise the same
-// input-generation path a visitor's run does, not a stand-in for it. Reads
-// the track from `state.track` every step (same TRACK_PRESETS[state.track]
-// lookup pattern step() itself uses) so a run started on a non-default track
-// actually autosteers toward *that* track's own calibrated target, not
-// silently falling back to controlsAtElapsed's DEFAULT_TRACK_ID default.
+// input-generation path a visitor's run does, not a stand-in for it.
+// throttleIntensity/throttleTiming are applied onto `state` here (rather
+// than requiring every caller to thread them through startedRun) since
+// controlsForState reads them off `state` itself.
 function driveAuto(
   state: SimState,
   throttleIntensity: ThrottleIntensityId,
@@ -70,10 +69,9 @@ function driveAuto(
   steps: number,
   dt: number = FIXED_TIMESTEP,
 ): SimState {
-  let s = state;
+  let s: SimState = { ...state, throttleIntensity, throttleTiming };
   for (let i = 0; i < steps; i++) {
-    const track = constants.TRACK_PRESETS[s.track] ?? constants.TRACK_PRESETS[constants.DEFAULT_TRACK_ID];
-    const controls = controlsAtElapsed(s.elapsed, throttleIntensity, throttleTiming, CAR_PARAMS, track);
+    const controls = controlsForState(s, CAR_PARAMS, dt);
     s = step(s, controls, dt);
   }
   return s;
@@ -180,11 +178,12 @@ describe("B. braking reaches a genuine, held stop", () => {
 // ---------------------------------------------------------------------------
 // C. Autosteer authority follows the reference corner
 // ---------------------------------------------------------------------------
-// Steering is no longer a visitor-adjustable variable — controlsAtElapsed
-// produces a single fixed autosteer target (see inputs.ts), ramped in from 0
-// the same way throttle ramps toward its selected intensity. These tests
-// exercise that program directly instead of hand-built steering fractions
-// that the visitor can no longer choose.
+// Steering is no longer a visitor-adjustable variable — controlsForState
+// produces a closed-loop correction toward the track's own reference arc
+// (see inputs.ts), rate-limited step to step the same way throttle ramps
+// toward its selected intensity. These tests exercise that program directly
+// instead of hand-built steering fractions that the visitor can no longer
+// choose.
 describe("C. autosteer follows the reference corner", () => {
   const ROAD_HALF_WIDTH = 7; // matches src/rendering/scene.ts's ROAD_HALF_WIDTH
 
@@ -195,9 +194,24 @@ describe("C. autosteer follows the reference corner", () => {
     return driveAuto(startedRun("RWD", "dry"), "light", "late", Math.round(seconds / FIXED_TIMESTEP));
   }
 
-  it("autosteer ramps in from exactly 0 at the start of a run rather than snapping to the baseline", () => {
-    const atStart = controlsAtElapsed(0, "medium", "early", CAR_PARAMS);
-    expect(atStart.steering).toBe(0);
+  it("steering ramps in gradually from 0 at the start of a run rather than snapping straight to the target", () => {
+    const state0 = startedRun("RWD", "dry", "medium", "early");
+    expect(state0.steering).toBe(0);
+
+    const firstStepControls = controlsForState(state0, CAR_PARAMS, FIXED_TIMESTEP);
+    const maxFirstStepDelta = CAR_PARAMS.steerRampPerSecond * FIXED_TIMESTEP;
+    // At the very first step the car sits exactly on the reference line
+    // heading exactly along its tangent, so the only nonzero contribution to
+    // the target is the track's feedforward autosteer fraction — but even
+    // that nonzero target must not be applied all at once.
+    expect(Math.abs(firstStepControls.steering)).toBeGreaterThan(0);
+    expect(Math.abs(firstStepControls.steering)).toBeLessThanOrEqual(maxFirstStepDelta + 1e-9);
+
+    // Driven for a full second, steering should have ramped up well past a
+    // single step's worth of change, converging toward the track's own
+    // calibrated feedforward target rather than staying pinned near 0.
+    const afterOneSecond = driveAuto(state0, "medium", "early", Math.round(1 / FIXED_TIMESTEP));
+    expect(Math.abs(afterOneSecond.steering)).toBeGreaterThan(maxFirstStepDelta * 5);
   });
 
   it("the autosteer program follows the reference line within the road width for a sustained interval", () => {
@@ -253,9 +267,9 @@ describe("D. drivetrain and surface change motion, not only utilisation numbers"
 
   it("AWD delays single-axle saturation later than FWD/RWD under the identical script, without becoming unable to slide", () => {
     function stepsToSaturate(drivetrain: DrivetrainId): number {
-      let state = startedRun(drivetrain, "dry");
+      let state = startedRun(drivetrain, "dry", "full", "early");
       for (let i = 1; i <= STEPS; i++) {
-        const controls = controlsAtElapsed(state.elapsed, "full", "early", CAR_PARAMS);
+        const controls = controlsForState(state, CAR_PARAMS, FIXED_TIMESTEP);
         state = step(state, controls, FIXED_TIMESTEP);
         if (state.front.saturated || state.rear.saturated) return i;
       }
@@ -266,15 +280,30 @@ describe("D. drivetrain and surface change motion, not only utilisation numbers"
     const awd = stepsToSaturate("AWD");
     expect(awd).toBeGreaterThan(Math.min(fwd, rwd));
 
-    const awdHarder = driveAuto(startedRun("AWD", "dry"), "full", "early", STEPS * 3);
-    expect(awdHarder.front.saturated || awdHarder.rear.saturated).toBe(true);
+    // Checks saturation ever occurred across the run, not just in the final
+    // state: with the barrier's reaction-force rebound (physics.ts), a car
+    // driven hard enough to reach the outer boundary bounces back and sheds
+    // enough speed to regain traction before this loop ends — a real,
+    // desired consequence of a physical bounce-back replacing the old
+    // "scrape along the wall forever" clamp, not a sign AWD can no longer
+    // slide. The saturation this asserts on does still happen (confirmed at
+    // step ~400 of this exact script) — it just doesn't necessarily persist
+    // to the last step anymore.
+    let awdHarder: SimState = { ...startedRun("AWD", "dry"), throttleIntensity: "full", throttleTiming: "early" };
+    let everSaturated = false;
+    for (let i = 0; i < STEPS * 3; i++) {
+      const controls = controlsForState(awdHarder, CAR_PARAMS, FIXED_TIMESTEP);
+      awdHarder = step(awdHarder, controls, FIXED_TIMESTEP);
+      if (awdHarder.front.saturated || awdHarder.rear.saturated) everSaturated = true;
+    }
+    expect(everSaturated).toBe(true);
   });
 
   it("wet and ice reach rear-axle saturation earlier than dry, with a body-slip difference visible over the sustained run", () => {
     function stepsToSaturate(surface: SurfaceId): number {
-      let state = startedRun("RWD", surface);
+      let state = startedRun("RWD", surface, "full", "early");
       for (let i = 1; i <= STEPS; i++) {
-        const controls = controlsAtElapsed(state.elapsed, "full", "early", CAR_PARAMS);
+        const controls = controlsForState(state, CAR_PARAMS, FIXED_TIMESTEP);
         state = step(state, controls, FIXED_TIMESTEP);
         if (state.rear.saturated) return i;
       }
@@ -314,9 +343,9 @@ describe("E. throttle timing produces a measurable saturation-timing contrast", 
   const RUN_STEPS = Math.round(constants.SAFETY_CAP_SECONDS / FIXED_TIMESTEP);
 
   function stepsToRearSaturation(throttleTiming: ThrottleTimingId): number {
-    let state = startedRun("RWD", "dry");
+    let state = startedRun("RWD", "dry", "full", throttleTiming);
     for (let i = 1; i <= RUN_STEPS; i++) {
-      const controls = controlsAtElapsed(state.elapsed, "full", throttleTiming, CAR_PARAMS);
+      const controls = controlsForState(state, CAR_PARAMS, FIXED_TIMESTEP);
       state = step(state, controls, FIXED_TIMESTEP);
       if (state.rear.saturated) return i;
     }
@@ -367,8 +396,7 @@ describe("G. track choice changes saturation timing — hairpin vs. sweep", () =
   ): number {
     let state = startedRun(drivetrain, "dry", throttleIntensity, "early", track);
     for (let i = 1; i <= CAP_STEPS; i++) {
-      const trackParams = constants.TRACK_PRESETS[state.track];
-      const controls = controlsAtElapsed(state.elapsed, throttleIntensity, "early", CAR_PARAMS, trackParams);
+      const controls = controlsForState(state, CAR_PARAMS, FIXED_TIMESTEP);
       state = step(state, controls, FIXED_TIMESTEP);
       if (state.front.saturated || state.rear.saturated) return i;
       if (physics.shouldFinish(state)) break;

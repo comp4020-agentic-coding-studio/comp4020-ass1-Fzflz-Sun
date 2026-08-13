@@ -1,5 +1,9 @@
 import {
   AT_REST_SPEED,
+  BARRIER_COLLISION_LIMIT_METERS,
+  BARRIER_IMPACT_FRICTION_FACTOR,
+  BARRIER_RESTITUTION,
+  CAR_HALF_WIDTH_METERS,
   CAR_PARAMS,
   DEFAULT_TRACK_ID,
   ENTRY_SPEED,
@@ -9,7 +13,7 @@ import {
   SURFACE_PRESETS,
   TRACK_PRESETS,
 } from "./constants.ts";
-import { pathOffset, sweptAngleRate } from "./track.ts";
+import { pathOffset, sweptAngleRate, trackCentre } from "./track.ts";
 import type {
   AxleState,
   CarParams,
@@ -257,10 +261,49 @@ export function step(
 
   const heading = state.heading + yawRate * dt;
 
-  const vxWorld = vx * Math.cos(heading) - vy * Math.sin(heading);
-  const vyWorld = vx * Math.sin(heading) + vy * Math.cos(heading);
-  const x = state.x + vxWorld * dt;
-  const y = state.y + vyWorld * dt;
+  let vxWorld = vx * Math.cos(heading) - vy * Math.sin(heading);
+  let vyWorld = vx * Math.sin(heading) + vy * Math.cos(heading);
+  let x = state.x + vxWorld * dt;
+  let y = state.y + vyWorld * dt;
+
+  // Outer-track barrier: a real physical boundary, not merely a rendered
+  // barrier model (see environment.ts) — the barrier's own placement never
+  // moves, but the car's body can no longer pass through it. Expressed as a
+  // radial limit on distance from the track's own centre of curvature rather
+  // than literal 3D box collision, since both the road and the barrier are
+  // already defined relative to the same arc (see BARRIER_COLLISION_LIMIT_METERS,
+  // constants.ts) — this keeps physics free of any Three.js/mesh awareness.
+  // Position is clamped radially onto the boundary (never allowed to
+  // penetrate), and the response is a genuine reaction-force rebound, not a
+  // "stop dead at the wall" clamp: a stationary obstacle pushes back. The
+  // outward-radial (impact-normal) component of velocity reverses at
+  // BARRIER_RESTITUTION of its impact speed, and the along-the-wall
+  // (tangential, "scrape") component is bled off by an amount that scales
+  // with the current surface's own grip (mu, computed above) — a grippier
+  // surface sheds more of that sliding speed on contact than an icy one.
+  const { cx, cy } = trackCentre(track);
+  const distanceFromCentre = Math.hypot(x - cx, y - cy);
+  const maxDistanceFromCentre = track.radius + BARRIER_COLLISION_LIMIT_METERS - CAR_HALF_WIDTH_METERS;
+  if (distanceFromCentre > maxDistanceFromCentre) {
+    const radialX = (x - cx) / distanceFromCentre;
+    const radialY = (y - cy) / distanceFromCentre;
+    x = cx + radialX * maxDistanceFromCentre;
+    y = cy + radialY * maxDistanceFromCentre;
+    const outwardRadialSpeed = vxWorld * radialX + vyWorld * radialY;
+    if (outwardRadialSpeed > 0) {
+      const tangentialX = vxWorld - outwardRadialSpeed * radialX;
+      const tangentialY = vyWorld - outwardRadialSpeed * radialY;
+      const reboundSpeed = outwardRadialSpeed * BARRIER_RESTITUTION;
+      const tangentialRetained = Math.max(0, 1 - mu * BARRIER_IMPACT_FRICTION_FACTOR);
+      vxWorld = -radialX * reboundSpeed + tangentialX * tangentialRetained;
+      vyWorld = -radialY * reboundSpeed + tangentialY * tangentialRetained;
+      // Re-derive body-frame vx/vy from the corrected world velocity (inverse
+      // of the rotation above) so SimState.vx/vy stay consistent with the
+      // car's actual, now-bounded world motion.
+      vx = vxWorld * Math.cos(heading) + vyWorld * Math.sin(heading);
+      vy = -vxWorld * Math.sin(heading) + vyWorld * Math.cos(heading);
+    }
+  }
 
   // Progress around this track's own corner (see sweptAngleRate, track.ts),
   // integrated from the car's pre-step position — used by shouldFinish below

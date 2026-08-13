@@ -409,12 +409,61 @@ the agent from drifting off that idea or breaking the harness that tests it.
   visitor.** This was a deliberate redesign: real-time input makes visitor
   skill (how well they steer or modulate throttle) a second variable
   entangled with the thing the prototype teaches (the shared per-axle grip
-  budget). `controlsAtElapsed(elapsed, throttleIntensity, throttleTiming,
-  params, track)` is a pure, closed-form function of elapsed time and the
-  five settings — steering always ramps toward the *selected track's own*
-  fixed autosteer target, never a visitor input. Reopening real-time driving
-  input requires deliberately revisiting this confound, not just wiring up
-  held buttons again.
+  budget). `controlsForState(state, params, dt)` is a pure function of the
+  current simulation state and the five settings — the visitor never adjusts
+  steering directly, only which track to autosteer around. Reopening
+  real-time driving input requires deliberately revisiting this confound,
+  not just wiring up held buttons again.
+- **Steering is a deliberate, user-directed exception to "never
+  state-feedback".** The original design had steering ramp toward a fixed
+  target purely as a function of elapsed time, with no dependence on the
+  car's actual trajectory — chosen specifically so grip-budget saturation
+  was the *sole* determinant of how far the car ran wide. That invariant was
+  explicitly overridden by the user (twice-confirmed via `AskUserQuestion`,
+  accepting the change to the teaching signal): `controlsForState`
+  (`inputs.ts`) now sums the track's fixed feedforward target with a
+  cross-track term (`CROSS_TRACK_GAIN * pathOffset`) and a heading term
+  (`HEADING_GAIN * headingError`), so the car actively corrects back toward
+  the reference line and toward the arc's tangent after a slide, using its
+  *current* heading as the baseline — not "always turn left for a left
+  corner" regardless of what the car is actually doing. Both gains are
+  starting values that must stay low enough that understeer/oversteer/slide
+  saturation remains visibly reachable (see `docs/model-assumptions.md`) —
+  re-verify this by driving, not just by reading the unit tests, since a
+  gain that fully cancels saturation defeats this prototype's one idea. If a
+  future request wants to revert to pure feedforward (no state-feedback),
+  that is reverting *this* explicit exception, not restoring some accidental
+  drift.
+- **The track's outer barrier is a real physical boundary, not a cosmetic
+  render.** Also user-directed: the barrier used to be visible but had no
+  collision box, so the car clipped straight through it. Because the road
+  and barrier are both defined relative to the same circular arc, the
+  barrier is a 1D radial limit on `pathOffset`
+  (`BARRIER_COLLISION_LIMIT_METERS`, `constants.ts`) enforced inside
+  `step()` (`physics.ts`) — never literal 3D mesh collision, so
+  `src/simulation/` still never needs to know about Three.js. Hitting it
+  clamps position back onto the boundary circle, then applies a genuine
+  reaction-force rebound, not a "stop dead at the wall" clamp: the
+  outward-radial (impact-normal) velocity component reverses at
+  `BARRIER_RESTITUTION` of its impact speed, and the tangential ("scrape")
+  component is bled off by an amount that scales with the current surface's
+  own grip (`mu`) via `BARRIER_IMPACT_FRICTION_FACTOR` — a grippier surface
+  sheds more of that sliding speed on contact than an icy one. This is not a
+  hard stop, a crash state, or a new `RunPhase` — the run continues and
+  still finishes normally via `shouldFinish`. It applies unconditionally
+  whenever `phase === "running"`, for any `ControlInputs`, the same
+  place/spirit as the existing `maxSpeed` safety clamp. The barrier's
+  already-tuned *render* position (`environment.ts`) must not move to
+  accommodate this — the constants this boundary is derived from
+  (`ROAD_HALF_WIDTH`, `KERB_WIDTH_METERS`, `BARRIER_KERB_GAP_METERS`) live in
+  `src/simulation/constants.ts` as the single source of truth and are
+  re-exported/imported back into `src/rendering/` for the render-side
+  layout, not the other way around. `CAR_HALF_WIDTH_METERS` (the car-side
+  half of this boundary) must itself be derived from the rendered vehicle's
+  own measured fitted bounding box (`vehicle.ts`'s DEV bbox diagnostic),
+  never a hand-picked "real-world" estimate independent of it — that
+  mismatch was a real bug: a hand-picked `0.9m` let the car's visible mesh
+  poke through the barrier while the physics-level boundary looked fine.
 - **Throttle-timing thresholds (`THROTTLE_TIMING_PRESETS`) are not a
   standalone tuning knob** --- same discipline as `maxSteerAngle`. They must
   be calibrated together with every `TRACK_PRESETS` entry's

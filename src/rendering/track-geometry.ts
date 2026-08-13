@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { TrackParams } from "../simulation/index.ts";
+import { KERB_WIDTH_METERS, ROAD_HALF_WIDTH, type TrackParams } from "../simulation/index.ts";
 import { trackCentre } from "../simulation/track.ts";
 import { simToWorld, type WorldXZ } from "./coordinates.ts";
 import { createFinishMarkerMaterial, createKerbMaterial, createReferenceLineMaterial, createRoadMaterial } from "./materials.ts";
@@ -13,11 +13,13 @@ export interface Point2D {
   y: number;
 }
 
-// Exported so environment.ts can place trackside scenery relative to the
-// same road edges this module draws, instead of duplicating (and risking
-// drifting from) these numbers.
-export const ROAD_HALF_WIDTH = 7; // m, matches the previous 2D scene's road width
-export const KERB_WIDTH_METERS = 1.2;
+// Re-exported so environment.ts (and anything else placing trackside
+// scenery relative to the same road edges this module draws) can import
+// them from here — the values themselves now live in
+// src/simulation/constants.ts, shared with physics.ts's outer-track
+// collision boundary, so there is one source of truth instead of two
+// independently-drifting copies.
+export { KERB_WIDTH_METERS, ROAD_HALF_WIDTH };
 const REFERENCE_LINE_HALF_WIDTH = 0.15;
 const FINISH_MARKER_DEPTH_METERS = 1.5;
 

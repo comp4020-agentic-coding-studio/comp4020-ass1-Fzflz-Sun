@@ -32,8 +32,8 @@ export type ThrottleTimingId = "early" | "mid" | "late";
 
 /** The analog driving inputs for one simulation step: steering in [-1, 1]
  * (positive = left), throttle and brake in [0, 1]. Produced by
- * `controlsAtElapsed` as a pure function of elapsed run time and the
- * visitor's discrete settings — there is no held/real-time input. */
+ * `controlsForState` as a pure function of the current simulation state and
+ * the visitor's discrete settings — there is no held/real-time input. */
 export interface ControlInputs {
   steering: number;
   throttle: number;

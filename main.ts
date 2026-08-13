@@ -1,14 +1,13 @@
 import { createGripScene } from "./src/rendering/scene.ts";
 import {
   CAR_PARAMS,
-  controlsAtElapsed,
+  controlsForState,
   createInitialState,
   DEFAULT_TRACK_ID,
   FIXED_TIMESTEP,
   shouldFinish,
   startRun,
   step,
-  TRACK_PRESETS,
 } from "./src/simulation/index.ts";
 import type {
   DrivetrainId,
@@ -197,13 +196,7 @@ function frame(time: number): void {
 
   let steps = 0;
   while (accumulator >= FIXED_TIMESTEP && steps < MAX_STEPS_PER_FRAME) {
-    const controls = controlsAtElapsed(
-      simState.elapsed,
-      simState.throttleIntensity,
-      simState.throttleTiming,
-      CAR_PARAMS,
-      TRACK_PRESETS[simState.track],
-    );
+    const controls = controlsForState(simState, CAR_PARAMS, FIXED_TIMESTEP);
     simState = step(simState, controls, FIXED_TIMESTEP);
     if (simState.phase === "running" && shouldFinish(simState)) {
       simState = { ...simState, phase: "finished" };
