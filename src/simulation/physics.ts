@@ -1,5 +1,6 @@
 import {
   AT_REST_SPEED,
+  AUTO_FINISH_GRACE_SECONDS,
   BARRIER_COLLISION_LIMIT_METERS,
   BARRIER_IMPACT_FRICTION_FACTOR,
   BARRIER_RESTITUTION,
@@ -337,14 +338,26 @@ export function step(
 /** Whether a "running" state should transition to "finished" — checked by
  * the caller's frame loop (main.ts) after each step, never inside step()
  * itself (step() only ever advances physics; lifecycle transitions stay the
- * caller's responsibility, same as the "running" phase gate above).
- * Position-based: normally true once the car's accumulated `sweptAngle`
- * reaches the selected track's `sweepAngle` — i.e. it has reached the end of
- * the track's geometry, not merely driven for a fixed duration. The
- * `elapsed >= SAFETY_CAP_SECONDS` half is a backstop only: it exists so a
- * pathological settings combination (e.g. stalling on ice) can't leave a run
- * stuck in "running" forever, not as the normal way a run ends. */
+ * caller's responsibility, same as the "running" phase gate above). Three
+ * tiers, each looser than the last:
+ * 1. Position-based (normal case): true once the car's accumulated
+ *    `sweptAngle` reaches the selected track's `sweepAngle` — it has reached
+ *    the end of the track's geometry.
+ * 2. `elapsed >= track.expectedTraversalSeconds + AUTO_FINISH_GRACE_SECONDS`:
+ *    the practical backstop. `expectedTraversalSeconds` is the track's own
+ *    no-slip ideal transit time at ENTRY_SPEED, so a run still going this
+ *    many seconds past that has demonstrably stopped making real progress
+ *    (run wide, stuck bouncing off the barrier, etc.) — force-finish rather
+ *    than let it wander indefinitely.
+ * 3. `elapsed >= SAFETY_CAP_SECONDS`: an absolute, track-independent final
+ *    backstop, kept only in case a future preset's `expectedTraversalSeconds`
+ *    is ever miscalibrated; comfortably larger than tier 2 for every current
+ *    preset, so it should never actually be the condition that trips. */
 export function shouldFinish(state: SimState): boolean {
   const track = TRACK_PRESETS[state.track] ?? TRACK_PRESETS[DEFAULT_TRACK_ID];
-  return state.sweptAngle >= track.sweepAngle || state.elapsed >= SAFETY_CAP_SECONDS;
+  return (
+    state.sweptAngle >= track.sweepAngle ||
+    state.elapsed >= track.expectedTraversalSeconds + AUTO_FINISH_GRACE_SECONDS ||
+    state.elapsed >= SAFETY_CAP_SECONDS
+  );
 }

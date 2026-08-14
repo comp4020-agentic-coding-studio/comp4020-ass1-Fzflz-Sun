@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTO_FINISH_GRACE_SECONDS,
   BARRIER_COLLISION_LIMIT_METERS,
   CAR_HALF_WIDTH_METERS,
   CAR_PARAMS,
@@ -343,13 +344,14 @@ describe("finish condition is position-based, not duration-based", () => {
     throw new Error(`${track} never reached shouldFinish within the safety cap`);
   }
 
-  it("a normal sweep run finishes once sweptAngle reaches the track's own sweepAngle, well inside the safety cap", () => {
+  it("a normal sweep run finishes once sweptAngle reaches the track's own sweepAngle, well inside its auto-finish grace window", () => {
     const track = TRACK_PRESETS["sweep-right"];
     const finished = runToFinish("sweep-right");
     expect(finished.sweptAngle).toBeGreaterThanOrEqual(track.sweepAngle);
-    // Confirms the position condition tripped shouldFinish, not the
-    // SAFETY_CAP_SECONDS backstop — a pathologically slow run is the only
-    // case that should ever reach the cap.
+    // Confirms the position condition tripped shouldFinish, not either
+    // elapsed-based backstop — a pathologically slow/stuck run is the only
+    // case that should ever reach those.
+    expect(finished.elapsed).toBeLessThan(track.expectedTraversalSeconds + AUTO_FINISH_GRACE_SECONDS);
     expect(finished.elapsed).toBeLessThan(SAFETY_CAP_SECONDS);
   });
 
@@ -362,6 +364,7 @@ describe("finish condition is position-based, not duration-based", () => {
     expect(hairpinFinished.sweptAngle).toBeGreaterThanOrEqual(hairpinTrack.sweepAngle);
     expect(hairpinTrack.sweepAngle).toBeGreaterThan(sweepTrack.sweepAngle);
     expect(hairpinFinished.elapsed).toBeGreaterThan(sweepFinished.elapsed);
+    expect(hairpinFinished.elapsed).toBeLessThan(hairpinTrack.expectedTraversalSeconds + AUTO_FINISH_GRACE_SECONDS);
     expect(hairpinFinished.elapsed).toBeLessThan(SAFETY_CAP_SECONDS);
   });
 
@@ -376,4 +379,31 @@ describe("finish condition is position-based, not duration-based", () => {
     const chordLength = 2 * track.radius * Math.sin(track.sweepAngle / 2);
     expect(travelled).toBeGreaterThan(chordLength * 0.5);
   });
+});
+
+// A car that has run wide, or is stuck bouncing off the barrier, may never
+// accumulate enough sweptAngle to finish positionally — shouldFinish's
+// per-track grace window (tier 2, see its doc comment) is what actually
+// force-finishes that run, well before the flat SAFETY_CAP_SECONDS backstop
+// (tier 3) would. Tested directly against a synthetic state that never makes
+// positional progress (sweptAngle pinned at 0), isolating this branch from
+// whatever the full physics loop happens to do.
+describe("shouldFinish's auto-finish grace window (a run that never makes positional progress)", () => {
+  function stuckAt(track: TrackId, elapsed: number): SimState {
+    return { ...startRun(createInitialState("RWD", "dry", "medium", "early", track)), sweptAngle: 0, elapsed };
+  }
+
+  it.each([TRACK_PRESETS["sweep-right"], TRACK_PRESETS["hairpin-right"]])(
+    "force-finishes a stuck $id run once elapsed passes expectedTraversalSeconds + AUTO_FINISH_GRACE_SECONDS, not before",
+    (track) => {
+      const cutoff = track.expectedTraversalSeconds + AUTO_FINISH_GRACE_SECONDS;
+      expect(shouldFinish(stuckAt(track.id, cutoff - 0.01))).toBe(false);
+      expect(shouldFinish(stuckAt(track.id, cutoff))).toBe(true);
+
+      // Confirms the new, tighter per-track rule is what trips here, not the
+      // old flat backstop — otherwise this test would just be re-proving
+      // SAFETY_CAP_SECONDS, which was always comfortably larger.
+      expect(cutoff).toBeLessThan(SAFETY_CAP_SECONDS);
+    },
+  );
 });

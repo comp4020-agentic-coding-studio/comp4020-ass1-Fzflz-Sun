@@ -483,11 +483,20 @@ the agent from drifting off that idea or breaking the harness that tests it.
   (`trackCentre`, `referenceCurvature`, `sweptAngleRate`) --- never a second,
   separately-tuned set of physics constants. A run's `Finished` state is
   reached positionally, when `SimState.sweptAngle` reaches the selected
-  track's `sweepAngle` (`shouldFinish` in `physics.ts`), backed by a generous
-  `SAFETY_CAP_SECONDS` duration cap so a pathological settings combination
-  can't leave a run stuck in `"running"` forever --- the cap is a safety net,
-  not the primary finish trigger, and must stay comfortably above every
-  preset's `expectedTraversalSeconds`.
+  track's `sweepAngle` (`shouldFinish` in `physics.ts`), backed by two
+  elapsed-based backstops, neither the primary finish trigger. The tighter
+  one, `AUTO_FINISH_GRACE_SECONDS` (currently `0` --- no added slack),
+  force-finishes a run the instant `elapsed` reaches the selected track's own
+  `expectedTraversalSeconds` (its no-slip ideal transit time) if it hasn't
+  already finished positionally --- catching a run that has gone wide or is
+  stuck bouncing off the outer barrier and has demonstrably stopped making
+  real positional progress, not the old flat cap alone. Behind that sits the
+  original, generous `SAFETY_CAP_SECONDS` duration cap as a final,
+  track-independent backstop so a pathological settings combination can't
+  leave a run stuck in `"running"` forever even if a future preset's
+  `expectedTraversalSeconds` were ever miscalibrated --- it must stay
+  comfortably above every preset's own
+  `expectedTraversalSeconds + AUTO_FINISH_GRACE_SECONDS`.
 - **Historical pointer-capture lesson (kept for any future pointer-based
   interaction, even though `HeldControls`/pointer-capture code no longer
   exists in this repo):** a held pointer control must track *why* it's held

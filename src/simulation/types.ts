@@ -8,10 +8,12 @@ export type DrivingState = "stable" | "understeer" | "oversteer" | "slide";
  * classification: "ready" is the inert state on load/Reset (stationary,
  * indefinitely, until the visitor explicitly starts a run); "running" is a
  * started run over which handling can be observed; "finished" is reached
- * once the car reaches the end of its selected track's swept arc (or, as a
- * safety net, once `SAFETY_CAP_SECONDS` elapses — see `shouldFinish` in
- * physics.ts), and holds the settled final state until Run is pressed
- * again. */
+ * once the car reaches the end of its selected track's swept arc, or — as a
+ * backstop if it hasn't, e.g. it ran wide or got stuck on the barrier — once
+ * it overruns the track's own no-slip ideal transit time by more than
+ * `AUTO_FINISH_GRACE_SECONDS`, or, as a final absolute backstop,
+ * `SAFETY_CAP_SECONDS` elapses (see `shouldFinish` in physics.ts), and holds
+ * the settled final state until Run is pressed again. */
 export type RunPhase = "ready" | "running" | "finished";
 
 /** Discrete track/corner preset, chosen before a run and held fixed for its
@@ -173,10 +175,16 @@ export interface TrackParams {
    * docs/model-assumptions.md). Signed by `direction` in `inputs.ts`, not
    * here. */
   autosteerFraction: number;
-  /** Documented estimate of how long a coasting (no-throttle) traversal of
-   * this track takes at roughly `ENTRY_SPEED` — for calibration reasoning
-   * only (docs/model-assumptions.md); the actual "finished" trigger is
-   * position-based (`sweptAngle` reaching `sweepAngle`), not this estimate. */
+  /** Documented estimate of how long a coasting (no-throttle), no-slip
+   * traversal of this track takes at roughly `ENTRY_SPEED` — originally for
+   * calibration reasoning only (docs/model-assumptions.md), and still
+   * primarily that: the normal "finished" trigger stays position-based
+   * (`sweptAngle` reaching `sweepAngle`). It is now also read at runtime by
+   * `shouldFinish` (physics.ts) as the baseline for a tighter backstop —
+   * `expectedTraversalSeconds + AUTO_FINISH_GRACE_SECONDS` — that
+   * force-finishes a run which has run wide or stalled and stopped making
+   * real position-based progress, well before the flat `SAFETY_CAP_SECONDS`
+   * would. */
   expectedTraversalSeconds: number;
   /** Optional constant grade angle (radians, positive = uphill). When
    * present, `step()` (physics.ts) adds a single

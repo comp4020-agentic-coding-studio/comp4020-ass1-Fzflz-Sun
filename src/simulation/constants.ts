@@ -282,6 +282,18 @@ export const AT_REST_SPEED = 0.05;
 // ~8.7s expected) so it is never the thing a normal run hits.
 export const SAFETY_CAP_SECONDS = 20;
 
+// Seconds of slack allowed above a track's own `expectedTraversalSeconds`
+// (its no-slip ideal transit time around the arc at ENTRY_SPEED) before
+// `shouldFinish` (physics.ts) force-finishes the run even though it hasn't
+// reached the end of the track's geometry. This is the practical backstop
+// for a car that has run wide, bounced off the barrier, or otherwise
+// stopped making real progress toward the finish — much tighter and more
+// responsive per-track than the flat `SAFETY_CAP_SECONDS` above, which
+// stays in place only as a final, track-independent backstop (comfortably
+// larger than `expectedTraversalSeconds + AUTO_FINISH_GRACE_SECONDS` for
+// every preset, so it should never actually be the thing that fires).
+export const AUTO_FINISH_GRACE_SECONDS = 0;
+
 // Discrete throttle-intensity choices, each a fixed fraction of
 // maxEngineForce the run ramps toward once its timing threshold is reached.
 // Same discipline as SURFACE_PRESETS: a documented teaching ordering

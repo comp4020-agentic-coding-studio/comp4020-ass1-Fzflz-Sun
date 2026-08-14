@@ -117,16 +117,28 @@ budget; drivetrain only changes which axle receives the throttle share.
     length instead of the old unbounded arc: sized, together with `radius`
     and `ENTRY_SPEED`, so the documented entry speed brings the car to the
     end of the arc in a legible few seconds.
-    `expectedTraversalSeconds` is the coasting estimate used for that
-    *sizing*, not the finish trigger itself — see the lifecycle section
-    below for how `Finished` is actually reached.
-- **`SAFETY_CAP_SECONDS = 20`.** A generous backstop duration that
-  force-finishes a run regardless of position, so a pathological settings
-  combination (e.g. a stalled car on ice that never reaches the end of its
-  track) can't leave a run stuck `"running"` forever. This is a safety net,
-  *not* the primary finish trigger — see `shouldFinish` in the lifecycle
-  section below — sized comfortably above the slowest realistic traversal
-  (the hairpin, ~8.7s expected).
+    `expectedTraversalSeconds` is the coasting, no-slip estimate used for
+    that *sizing* — and, as of `AUTO_FINISH_GRACE_SECONDS` below, also the
+    baseline for the tighter of `shouldFinish`'s two elapsed-based
+    backstops. See the lifecycle section below for the full three-tier rule.
+- **`AUTO_FINISH_GRACE_SECONDS = 0`.** The practical backstop: if a run is
+  still going once `expectedTraversalSeconds` (no added slack) has elapsed
+  since it started, `shouldFinish` force-finishes it even though
+  `sweptAngle` hasn't reached `sweepAngle` — a car that has run wide, or is
+  stuck bouncing off the outer barrier, has by then demonstrably stopped
+  making real progress toward the finish, and previously kept "running" for
+  a further ~10-15s regardless (up to the old flat `SAFETY_CAP_SECONDS`
+  backstop) before ending. Tighter and track-relative, unlike
+  `SAFETY_CAP_SECONDS` below.
+- **`SAFETY_CAP_SECONDS = 20`.** A generous, track-independent backstop
+  duration that force-finishes a run regardless of position, so a
+  pathological settings combination (e.g. a stalled car on ice that never
+  reaches the end of its track) can't leave a run stuck `"running"` forever.
+  This is a safety net, *not* the primary finish trigger — see
+  `shouldFinish` in the lifecycle section below — sized comfortably above
+  even the slowest realistic traversal's own grace cutoff (the hairpin's
+  `8.7 + 0 = 8.7s`), so in practice `AUTO_FINISH_GRACE_SECONDS` above is
+  what actually fires for a stuck run, not this.
 - **`CROSS_TRACK_GAIN = 0.08 /m` and `HEADING_GAIN = 1.5 /rad`.** The
   closed-loop steering correction's two gains (see the Experiment lifecycle
   section below for the full law) — starting values, hand-tuned while
@@ -303,13 +315,18 @@ the track's centre of curvature), and `shouldFinish` (`physics.ts`) flips
 the phase to `"finished"` once `sweptAngle` reaches the selected track's own
 `sweepAngle` — i.e. once the car has actually travelled the length of the
 track it's on, not just "some fixed number of seconds have passed
-regardless of what the car did". `SAFETY_CAP_SECONDS` is a backstop, not the
-primary trigger: it only fires if a pathological combination (e.g. a stalled
-car on ice) would otherwise never complete the arc. The car holds its
-settled state at `"finished"` — `step` no-ops exactly as it does in
-`"ready"`. The five setting pickers are disabled only while
-`phase === "running"`, and re-enable the instant it reaches `"finished"`, so
-a run in progress can't be given an inconsistent mix of two configurations.
+regardless of what the car did". Two elapsed-based backstops sit behind
+that, neither the primary trigger: `AUTO_FINISH_GRACE_SECONDS` past the
+track's own `expectedTraversalSeconds` fires for a run that has run wide or
+is stuck on the barrier and has stopped making real positional progress,
+and the flat `SAFETY_CAP_SECONDS` sits behind *that* as an absolute final
+backstop for a pathological combination (e.g. a stalled car on ice) that
+somehow outlasts even the per-track grace window. The car holds its settled
+state at `"finished"` regardless of which of the three tripped it — `step`
+no-ops exactly as it does in `"ready"`. The five setting pickers are
+disabled only while `phase === "running"`, and re-enable the instant it
+reaches `"finished"`, so a run in progress can't be given an inconsistent
+mix of two configurations.
 Pressing `data-testid="start-run"` again works identically from `"ready"` or
 `"finished"` — no forced Reset in between — which is the entire "change one
 setting and compare" mechanic: pick a new value, press Run, and see a fresh,
