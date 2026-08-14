@@ -66,6 +66,17 @@ export interface GripScene {
   update(state: SimState, reducedMotion: boolean): void;
   resize(): void;
   dispose(): void;
+  /** Resolves once the initial vehicle glTF load has settled (loaded or
+   * failed — never rejects, matching the load's own swallowed-error
+   * handling below). The vehicle only gets positioned inside `update()`
+   * (`vehicle?.update(state)`), so a caller that calls `update()` exactly
+   * once — the reduced-motion "static composition" case — must await this
+   * first, or the vehicle can still be mid-load and render at its untouched
+   * default transform instead of the intended pose. A caller that runs a
+   * continuous per-frame loop (every other consumer today) doesn't need
+   * this: the next frame's `update()` call positions the vehicle correctly
+   * the moment its load resolves regardless. */
+  ready(): Promise<void>;
 }
 
 interface TrailPoint {
@@ -163,7 +174,7 @@ export function createGripScene(canvas: HTMLCanvasElement): GripScene {
   let rebuildGeneration = 0;
 
   let vehicle: Vehicle | null = null;
-  loadVehicle()
+  const vehicleReady: Promise<void> = loadVehicle()
     .then((loaded) => {
       vehicle = loaded;
       scene.add(loaded.root);
@@ -410,5 +421,9 @@ export function createGripScene(canvas: HTMLCanvasElement): GripScene {
 
   resize();
 
-  return { update, resize, dispose };
+  function ready(): Promise<void> {
+    return vehicleReady;
+  }
+
+  return { update, resize, dispose, ready };
 }

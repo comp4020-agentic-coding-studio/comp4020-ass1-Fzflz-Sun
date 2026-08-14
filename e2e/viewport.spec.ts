@@ -1,17 +1,16 @@
 import { expect, test } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 // Turns assessment spec line #3 ("works at both marking viewports") and
-// spec/brief.md's "core interaction, stated testably" into real-browser
-// checks. Runs against the built site via playwright.config.ts's webServer.
+// spec/brief.md's progressive-explorable structure into real-browser checks.
+// Runs against the built site via playwright.config.ts's webServer.
 //
-// The interaction is a discrete pre-run experiment, not real-time driving:
-// the visitor picks drivetrain/surface/throttle-intensity/throttle-timing/
-// track, presses Run, and watches a deterministic playback settle into a
-// "finished" state once the car reaches the end of its selected track's
-// finite swept arc (position-based, see shouldFinish in physics.ts) — not a
-// fixed wall-clock duration. Changing one setting and pressing Run again —
-// without a forced Reset in between — is the whole comparison mechanic this
-// file exercises.
+// The page is no longer one always-visible dashboard: it's an intro, five
+// single-variable teaching modules, and a full-freedom sandbox, each with its
+// own independent Run/Reset/canvas/state. Every getByTestId() below is scoped
+// to the module (or sandbox) it belongs to, since testids like "start-run" and
+// "state-label" now exist once per module/sandbox container, not once per
+// page — an unscoped getByTestId would be a Playwright strict-mode violation.
 const VIEWPORTS = [
   { name: "desktop", width: 1920, height: 1080 },
   { name: "phone", width: 390, height: 844 },
@@ -24,17 +23,54 @@ const VIEWPORTS = [
 const SAFETY_CAP_MS = 20_000;
 const FINISH_TIMEOUT_MS = SAFETY_CAP_MS + 3000;
 
-async function readNumber(page: import("@playwright/test").Page, testid: string): Promise<number> {
-  const text = await page.getByTestId(testid).textContent();
+// Sampled mid-run (not at "finished") on purpose: by the time a sustained
+// full-throttle+early script actually finishes, the car has usually been
+// pushed into a hard multi-second slide at very high speed, where utilisation
+// readings balloon well past 100% for every setting alike and stop ordering
+// cleanly — the same 2-4s window src/simulation/behaviour.test.ts section D
+// samples at, before that regime, is what actually shows each module's
+// single-variable contrast.
+const MID_RUN_SAMPLE_MS = 3000;
+
+// Each teaching module's own container testid and the exact setting-picker
+// testids it exposes (its one taught variable) — mirrors spec/assignment-1.test.ts's
+// MODULES table so the two files agree on the page's structure.
+const MODULES = [
+  { testid: "module-1", pickers: ["track-sweep-right", "track-hairpin-right"] },
+  { testid: "module-2", pickers: ["surface-dry", "surface-wet", "surface-ice"] },
+  {
+    testid: "module-3",
+    pickers: ["throttle-intensity-light", "throttle-intensity-medium", "throttle-intensity-full"],
+  },
+  { testid: "module-4", pickers: ["drivetrain-fwd", "drivetrain-rwd", "drivetrain-awd"] },
+  { testid: "module-5", pickers: ["throttle-timing-early", "throttle-timing-mid", "throttle-timing-late"] },
+] as const;
+
+async function readNumberIn(root: Locator, testid: string): Promise<number> {
+  const text = await root.getByTestId(testid).textContent();
   const n = Number.parseFloat((text ?? "").replace(/[^0-9.-]/g, ""));
   return Number.isNaN(n) ? 0 : n;
 }
 
-async function runToFinish(page: import("@playwright/test").Page): Promise<void> {
-  await page.getByTestId("start-run").click();
-  await expect(page.getByTestId("state-label")).toContainText("Finished", {
+async function runToFinish(root: Locator): Promise<void> {
+  await root.getByTestId("start-run").click();
+  await expect(root.getByTestId("state-label")).toContainText("Finished", {
     timeout: FINISH_TIMEOUT_MS,
   });
+}
+
+// Samples max(front, rear) utilisation MID_RUN_SAMPLE_MS after Run, having
+// first clicked whichever of a module's own pickers should be active. Resets
+// the module first so every sample starts from the same inert state.
+async function sampleUtilisation(root: Locator, picker: string): Promise<{ front: number; rear: number }> {
+  await root.getByTestId(picker).click();
+  await root.getByTestId("reset").click();
+  await root.getByTestId("start-run").click();
+  await root.page().waitForTimeout(MID_RUN_SAMPLE_MS);
+  const front = await readNumberIn(root, "front-utilisation");
+  const rear = await readNumberIn(root, "rear-utilisation");
+  await root.getByTestId("reset").click();
+  return { front, rear };
 }
 
 for (const viewport of VIEWPORTS) {
@@ -59,342 +95,303 @@ for (const viewport of VIEWPORTS) {
       ).toBeLessThanOrEqual(viewport.width);
     });
 
-    test("the sticky quick-reference bar expands once the key-info group scrolls out of .sidebar's view", async ({
+    test("the first screen shows only the intro thesis, no module or sandbox controls in view", async ({
       page,
     }) => {
       await page.goto("/");
-      await page.getByTestId("reset").click();
+      await expect(page.locator(".intro-copy")).toContainText("Grip is a budget");
+      await expect(page.locator(".intro-copy")).toContainText("Scroll to experiment");
 
-      const controlBar = page.getByTestId("control-bar");
-      await expect(
-        controlBar,
-        "the bar must start collapsed — the key-info group is fully visible before any scrolling",
-      ).toHaveAttribute("data-expanded", "false");
+      // module-1's Run button (the first control on the page below the
+      // intro) must not be within the first viewport's visible area — the
+      // intro is near-fullscreen with no sandbox/module controls exposed
+      // before the visitor scrolls.
+      const module1Top = await page.getByTestId("module-1").evaluate((el) => el.getBoundingClientRect().top);
+      expect(
+        module1Top,
+        "module-1 must sit below the first screen, not share it with the intro",
+      ).toBeGreaterThan(viewport.height * 0.5);
+    });
 
-      // How much room .sidebar actually has to scroll: this is real,
-      // viewport-dependent geometry, not a per-viewport branch we chose —
-      // at 390x844 the six sidebar sections overflow .sidebar's height, so
-      // scrolling genuinely pushes the key-info group out of view; at
-      // 1920x1080 they currently all fit without scrolling, so the group
-      // never leaves view and the bar correctly never expands there. Both
-      // are the same IntersectionObserver/CSS exercising real behaviour —
-      // this just asserts whichever outcome that behaviour actually produces
-      // at this viewport, instead of assuming a scroll distance that may not
-      // exist.
-      const canScroll = await page.evaluate(() => {
-        const sidebar = document.querySelector(".sidebar");
-        return sidebar !== null && sidebar.scrollHeight > sidebar.clientHeight;
-      });
-
-      await page.evaluate(() => document.querySelector(".sidebar")?.scrollTo({ top: 999999 }));
-
-      if (canScroll) {
-        await expect(
-          controlBar,
-          "scrolling the key-info group out of view must expand the sticky bar",
-        ).toHaveAttribute("data-expanded", "true");
-        await expect(page.getByTestId("sticky-state-label")).toBeVisible();
-        await expect(page.getByTestId("sticky-speed")).toBeVisible();
-
-        await page.evaluate(() => document.querySelector(".sidebar")?.scrollTo({ top: 0 }));
-        await expect(
-          controlBar,
-          "scrolling the key-info group back into view must collapse the sticky bar again",
-        ).toHaveAttribute("data-expanded", "false");
-      } else {
-        await expect(
-          controlBar,
-          "with nothing to scroll past, the bar must stay collapsed",
-        ).toHaveAttribute("data-expanded", "false");
+    test("scrolling reveals each teaching module in order, then the sandbox", async ({ page }) => {
+      await page.goto("/");
+      for (const { testid } of [...MODULES, { testid: "sandbox" as const }]) {
+        const el = page.getByTestId(testid);
+        await el.scrollIntoViewIfNeeded();
+        await expect(el).toBeVisible();
       }
-
-      // Run and Reset never move out of the always-visible control bar,
-      // regardless of expanded state.
-      await expect(page.getByTestId("start-run")).toBeVisible();
-      await expect(page.getByTestId("reset")).toBeVisible();
     });
 
-    test("renders the 3D stage visibly on first load, before Run is ever pressed", async ({ page }) => {
-      // main.ts's render loop calls scene.update() every frame regardless of
-      // run phase, so the chase-cam stage (car/track/environment) is meant to
-      // be visible immediately on load, not only once a run starts — this
-      // asserts that real, working behaviour rather than assuming it from the
-      // absence of a console error.
+    for (const { testid, pickers } of MODULES) {
+      test.describe(`teaching module ${testid}`, () => {
+        test("sits at rest until Run is pressed, even while changing its own setting", async ({ page }) => {
+          await page.goto("/");
+          const root = page.getByTestId(testid);
+          await root.scrollIntoViewIfNeeded();
+          await root.getByTestId("reset").click();
+          await expect(root.getByTestId("state-label")).toHaveText("Ready");
+          expect(await readNumberIn(root, "speed"), `${testid} must be at rest before Run`).toBe(0);
+
+          await root.getByTestId(pickers[pickers.length - 1]).click();
+          await expect(
+            root.getByTestId("state-label"),
+            `${testid}: changing its setting before Run must not leave Ready`,
+          ).toHaveText("Ready");
+          expect(await readNumberIn(root, "speed")).toBe(0);
+
+          await root.getByTestId("start-run").click();
+          await expect(root.getByTestId("state-label"), `${testid}: Run should leave Ready`).not.toHaveText(
+            "Ready",
+          );
+          expect(await readNumberIn(root, "speed"), `${testid}: Run should put the car in motion`).toBeGreaterThan(
+            5,
+          );
+        });
+
+        test("settles deterministically into a finished state", async ({ page }) => {
+          test.setTimeout(FINISH_TIMEOUT_MS + 5000);
+          await page.goto("/");
+          const root = page.getByTestId(testid);
+          await root.scrollIntoViewIfNeeded();
+          await root.getByTestId("reset").click();
+          await runToFinish(root);
+        });
+
+        test("its own setting pickers are disabled only while a run is in progress", async ({ page }) => {
+          test.setTimeout(FINISH_TIMEOUT_MS + 5000);
+          await page.goto("/");
+          const root = page.getByTestId(testid);
+          await root.scrollIntoViewIfNeeded();
+          await root.getByTestId("reset").click();
+          for (const picker of pickers) await expect(root.getByTestId(picker)).toBeEnabled();
+
+          await root.getByTestId("start-run").click();
+          for (const picker of pickers) await expect(root.getByTestId(picker)).toBeDisabled();
+
+          await expect(root.getByTestId("state-label")).toContainText("Finished", { timeout: FINISH_TIMEOUT_MS });
+          for (const picker of pickers) await expect(root.getByTestId(picker)).toBeEnabled();
+        });
+
+        test("its Run/Reset and setting pickers are keyboard-focusable", async ({ page }) => {
+          await page.goto("/");
+          const root = page.getByTestId(testid);
+          await root.scrollIntoViewIfNeeded();
+          for (const t of ["start-run", "reset", ...pickers]) {
+            await root.getByTestId(t).focus();
+            await expect(root.getByTestId(t)).toBeFocused();
+          }
+        });
+      });
+    }
+
+    test("module-1: the hairpin reaches more of the shared grip budget than the sweep", async ({ page }) => {
+      // Slack beyond the two intentional MID_RUN_SAMPLE_MS waits must cover a
+      // fresh WebGL scene mount and GLTF fetch/parse for each of the two
+      // sampleUtilisation() calls — nothing is warm-cached across tests since
+      // every test does its own full page.goto reload. 8s of slack was too
+      // tight and intermittently timed out under real (not idle) load; 20s
+      // gives real mount/load overhead room without loosening what's actually
+      // being asserted.
+      test.setTimeout(MID_RUN_SAMPLE_MS * 2 + 20000);
       await page.goto("/");
-      const canvas = page.getByTestId("scene-canvas");
-      await expect(canvas).toBeVisible();
-      const box = await canvas.boundingBox();
-      expect(box, "scene canvas must have a real, measurable box on first paint").not.toBeNull();
-      expect(box!.width).toBeGreaterThan(0);
-      expect(box!.height).toBeGreaterThan(0);
-    });
-
-    test("the car sits at rest until Run is pressed, even while changing settings", async ({ page }) => {
-      await page.goto("/");
-      await page.getByTestId("reset").click();
-      await expect(page.getByTestId("state-label")).toHaveText("Ready");
-      expect(await readNumber(page, "speed"), "the car must be at rest before Run is pressed").toBe(0);
-
-      // Settings are pre-run choices now, not live controls — picking one
-      // before Run must not move the car.
-      await page.getByTestId("surface-wet").click();
-      await page.getByTestId("throttle-intensity-full").click();
-      await expect(
-        page.getByTestId("state-label"),
-        "changing settings before Run must not leave the Ready phase",
-      ).toHaveText("Ready");
-      expect(await readNumber(page, "speed"), "the car must still be at rest").toBe(0);
-
-      await page.getByTestId("start-run").click();
-      await expect(
-        page.getByTestId("state-label"),
-        "Run should leave the Ready phase for a real driving state",
-      ).not.toHaveText("Ready");
+      const root = page.getByTestId("module-1");
+      await root.scrollIntoViewIfNeeded();
+      const sweep = await sampleUtilisation(root, "track-sweep-right");
+      const hairpin = await sampleUtilisation(root, "track-hairpin-right");
       expect(
-        await readNumber(page, "speed"),
-        "Run should put the car in motion at the documented entry speed",
-      ).toBeGreaterThan(5);
+        Math.max(hairpin.front, hairpin.rear),
+        "the tighter hairpin should use more of the shared grip budget than the sweep",
+      ).toBeGreaterThan(Math.max(sweep.front, sweep.rear));
     });
 
-    test("a full run drives real motion and settles into a finished state", async ({ page }) => {
-      test.setTimeout(FINISH_TIMEOUT_MS + 5000);
+    test("module-2: ice uses more of the grip budget than dry over the identical script", async ({ page }) => {
+      test.setTimeout(MID_RUN_SAMPLE_MS * 2 + 20000);
       await page.goto("/");
-      await page.getByTestId("reset").click();
-      const offsetBefore = await readNumber(page, "path-offset");
-
-      await runToFinish(page);
-
-      const speedAfter = await readNumber(page, "speed");
-      const offsetAfter = await readNumber(page, "path-offset");
-      expect(speedAfter, "speed should read real, non-zero motion after a run").toBeGreaterThan(1);
+      const root = page.getByTestId("module-2");
+      await root.scrollIntoViewIfNeeded();
+      const dry = await sampleUtilisation(root, "surface-dry");
+      const ice = await sampleUtilisation(root, "surface-ice");
       expect(
-        Math.abs(offsetAfter - offsetBefore),
-        "the autosteer program should move the car off the reference line over a full run",
-      ).toBeGreaterThan(0.05);
+        Math.max(ice.front, ice.rear),
+        "ice should saturate more of the same script's grip budget than dry",
+      ).toBeGreaterThan(Math.max(dry.front, dry.rear));
     });
 
-    test("throttle telemetry stays at 0% before the selected timing threshold, then reaches full", async ({
+    test("module-3: full throttle uses more rear grip than light throttle", async ({ page }) => {
+      test.setTimeout(MID_RUN_SAMPLE_MS * 2 + 20000);
+      await page.goto("/");
+      const root = page.getByTestId("module-3");
+      await root.scrollIntoViewIfNeeded();
+      const light = await sampleUtilisation(root, "throttle-intensity-light");
+      const full = await sampleUtilisation(root, "throttle-intensity-full");
+      expect(full.rear, "full throttle should load the rear axle more than light throttle").toBeGreaterThan(
+        light.rear,
+      );
+    });
+
+    test("module-4: drivetrain changes which axle carries the load, AWD delays saturation", async ({ page }) => {
+      test.setTimeout(MID_RUN_SAMPLE_MS * 3 + 25000);
+      await page.goto("/");
+      const root = page.getByTestId("module-4");
+      await root.scrollIntoViewIfNeeded();
+      const fwd = await sampleUtilisation(root, "drivetrain-fwd");
+      const rwd = await sampleUtilisation(root, "drivetrain-rwd");
+      const awd = await sampleUtilisation(root, "drivetrain-awd");
+
+      expect(fwd.front, "FWD should load the front axle more than RWD does").toBeGreaterThan(rwd.front);
+      expect(rwd.rear, "RWD should load the rear axle more than FWD does").toBeGreaterThan(fwd.rear);
+      expect(
+        Math.max(awd.front, awd.rear),
+        "AWD should delay saturation, not eliminate it — less loaded than FWD/RWD's own worst axle",
+      ).toBeLessThan(Math.max(fwd.front, rwd.rear));
+    });
+
+    test("module-5: an early throttle onset reaches more combined demand sooner than a late one", async ({
       page,
     }) => {
-      test.setTimeout(FINISH_TIMEOUT_MS + 5000);
+      test.setTimeout(MID_RUN_SAMPLE_MS * 2 + 20000);
       await page.goto("/");
-      await page.getByTestId("throttle-intensity-full").click();
-      await page.getByTestId("throttle-timing-late").click(); // 4.5s threshold
-      await page.getByTestId("reset").click();
-
-      await page.getByTestId("start-run").click();
-      await page.waitForTimeout(1000); // well before the 4.5s "late" threshold
+      const root = page.getByTestId("module-5");
+      await root.scrollIntoViewIfNeeded();
+      const early = await sampleUtilisation(root, "throttle-timing-early");
+      const late = await sampleUtilisation(root, "throttle-timing-late");
       expect(
-        await readNumber(page, "throttle-value"),
-        "throttle telemetry must read exactly 0% before the timing threshold is reached",
-      ).toBe(0);
-
-      await expect(page.getByTestId("state-label")).toContainText("Finished", {
-        timeout: FINISH_TIMEOUT_MS,
-      });
-      expect(
-        await readNumber(page, "throttle-value"),
-        "by the end of the run, throttle should have ramped up past the timing threshold",
-      ).toBeGreaterThan(50);
+        Math.max(early.front, early.rear),
+        "an early throttle onset should reach more combined demand at the same elapsed time than a late one",
+      ).toBeGreaterThan(Math.max(late.front, late.rear));
     });
 
-    test("throttle telemetry ramps toward the selected intensity, not always to full", async ({ page }) => {
-      test.setTimeout(FINISH_TIMEOUT_MS + 5000);
+    test("changing one module's setting never affects another module's state", async ({ page }) => {
       await page.goto("/");
-      await page.getByTestId("throttle-intensity-light").click();
-      await page.getByTestId("throttle-timing-early").click();
-      await page.getByTestId("reset").click();
+      const module1 = page.getByTestId("module-1");
+      const module2 = page.getByTestId("module-2");
+      await module1.scrollIntoViewIfNeeded();
+      await module1.getByTestId("reset").click();
+      const before = await module1.getByTestId("state-label").textContent();
 
-      await page.getByTestId("start-run").click();
-      await page.waitForTimeout(1500); // past light's ~0.33s ramp-in time
-      const lightThrottle = await readNumber(page, "throttle-value");
-      expect(lightThrottle, "light intensity should settle near its 40% fraction, not 100%").toBeLessThan(60);
-      expect(lightThrottle).toBeGreaterThan(20);
+      await module2.scrollIntoViewIfNeeded();
+      await module2.getByTestId("surface-ice").click();
+      await module2.getByTestId("reset").click();
+
+      await module1.scrollIntoViewIfNeeded();
+      await expect(
+        module1.getByTestId("state-label"),
+        "module-2's setting change must not touch module-1's state",
+      ).toHaveText(before ?? "Ready");
+      expect(await readNumberIn(module1, "speed"), "module-1 must still be at rest").toBe(0);
     });
 
-    // Sampled ~3s into the run (not at "finished") on purpose: by the full 6s
-    // duration a sustained full-throttle+early script has usually pushed the
-    // car into a hard multi-second slide at very high speed, where utilisation
-    // readings balloon well past 100% for every drivetrain alike and stop
-    // ordering cleanly — the same 2-4s window src/simulation/behaviour.test.ts
-    // section D samples at, before that regime, is what actually shows the
-    // drivetrain/surface contrast.
-    const MID_RUN_SAMPLE_MS = 3000;
-
-    test("selecting RWD changes which axle saturates most, versus FWD", async ({ page }) => {
-      test.setTimeout(MID_RUN_SAMPLE_MS * 2 + 8000);
+    test("scrolling a running module out of view pauses it; scrolling back resumes with no time jump", async ({
+      page,
+    }) => {
+      test.setTimeout(15000);
       await page.goto("/");
-      await page.getByTestId("throttle-intensity-full").click();
-      await page.getByTestId("throttle-timing-early").click();
+      const module1 = page.getByTestId("module-1");
+      const sandbox = page.getByTestId("sandbox");
 
-      await page.getByTestId("drivetrain-fwd").click();
-      await page.getByTestId("reset").click();
-      await page.getByTestId("start-run").click();
-      await page.waitForTimeout(MID_RUN_SAMPLE_MS);
-      const fwdFront = await readNumber(page, "front-utilisation");
-      const fwdRear = await readNumber(page, "rear-utilisation");
-      await page.getByTestId("reset").click();
+      await module1.scrollIntoViewIfNeeded();
+      await module1.getByTestId("reset").click();
+      await module1.getByTestId("start-run").click();
+      await page.waitForTimeout(800);
+      const beforeScrollAway = await readNumberIn(module1, "front-utilisation");
 
-      await page.getByTestId("drivetrain-rwd").click();
-      await page.getByTestId("reset").click();
-      await page.getByTestId("start-run").click();
-      await page.waitForTimeout(MID_RUN_SAMPLE_MS);
-      const rwdFront = await readNumber(page, "front-utilisation");
-      const rwdRear = await readNumber(page, "rear-utilisation");
-
-      expect(fwdFront, "FWD should load the front axle more than RWD does").toBeGreaterThan(rwdFront);
-      expect(rwdRear, "RWD should load the rear axle more than FWD does").toBeGreaterThan(fwdRear);
-    });
-
-    test("selecting the low-grip surface raises utilisation over the identical script", async ({ page }) => {
-      test.setTimeout(MID_RUN_SAMPLE_MS * 2 + 8000);
-      await page.goto("/");
-      await page.getByTestId("throttle-intensity-full").click();
-      await page.getByTestId("throttle-timing-early").click();
-
-      await page.getByTestId("surface-dry").click();
-      await page.getByTestId("reset").click();
-      await page.getByTestId("start-run").click();
-      await page.waitForTimeout(MID_RUN_SAMPLE_MS);
-      const dryUtil = Math.max(
-        await readNumber(page, "front-utilisation"),
-        await readNumber(page, "rear-utilisation"),
-      );
-      await page.getByTestId("reset").click();
-
-      await page.getByTestId("surface-ice").click();
-      await page.getByTestId("reset").click();
-      await page.getByTestId("start-run").click();
-      await page.waitForTimeout(MID_RUN_SAMPLE_MS);
-      const iceUtil = Math.max(
-        await readNumber(page, "front-utilisation"),
-        await readNumber(page, "rear-utilisation"),
-      );
+      // Scroll far enough away that module-1 leaves the viewport entirely,
+      // hold there long enough that an un-paused simulation would have
+      // clearly progressed, then come back.
+      await sandbox.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(1500);
+      await module1.scrollIntoViewIfNeeded();
+      const afterScrollBack = await readNumberIn(module1, "front-utilisation");
 
       expect(
-        iceUtil,
-        "the same script should use more of the ice preset's smaller grip budget",
-      ).toBeGreaterThan(dryUtil);
+        Math.abs(afterScrollBack - beforeScrollAway),
+        "an offscreen module must pause its physics stepping, not keep advancing unseen",
+      ).toBeLessThan(15);
     });
 
-    test("reset returns state, speed, and utilisation to the initial values", async ({ page }) => {
+    test("the sandbox exposes every variable as a mad-libs sentence of selects", async ({ page }) => {
       test.setTimeout(FINISH_TIMEOUT_MS + 5000);
       await page.goto("/");
-      await page.getByTestId("reset").click();
-      const initialState = await page.getByTestId("state-label").textContent();
+      const root = page.getByTestId("sandbox");
+      await root.scrollIntoViewIfNeeded();
 
-      await runToFinish(page);
-      await page.getByTestId("reset").click();
+      await root.getByTestId("drivetrain-select").selectOption("AWD");
+      await root.getByTestId("surface-select").selectOption("wet");
+      await root.getByTestId("throttle-intensity-select").selectOption("medium");
+      await root.getByTestId("throttle-timing-select").selectOption("mid");
+      await root.getByTestId("track-shape-select").selectOption("hairpin");
 
-      await expect(page.getByTestId("state-label")).toHaveText(initialState ?? "Ready");
-      const front = await readNumber(page, "front-utilisation");
-      const rear = await readNumber(page, "rear-utilisation");
-      expect(front, "reset should return front utilisation to (near) zero").toBeLessThan(5);
-      expect(rear, "reset should return rear utilisation to (near) zero").toBeLessThan(5);
-      expect(await readNumber(page, "speed"), "reset should return the car to rest").toBe(0);
+      const advanced = root.getByTestId("advanced-setup");
+      await advanced.locator("summary").click();
+      await root.getByTestId("track-direction-select").selectOption("left");
+
+      await root.getByTestId("reset").click();
+      await expect(root.getByTestId("state-label")).toHaveText("Ready");
+      await runToFinish(root);
     });
 
-    test("pressing Run again from finished starts a fresh run without a forced Reset", async ({ page }) => {
+    test("the sandbox's Telemetry disclosure reveals the full instrument panel", async ({ page }) => {
+      await page.goto("/");
+      const root = page.getByTestId("sandbox");
+      await root.scrollIntoViewIfNeeded();
+      const telemetry = root.getByTestId("telemetry");
+      await expect(root.getByTestId("longitudinal-g")).not.toBeVisible();
+      await telemetry.locator("summary").click();
+      await expect(root.getByTestId("longitudinal-g")).toBeVisible();
+      await expect(root.getByTestId("lateral-g")).toBeVisible();
+      await expect(root.getByTestId("steering-value")).toBeVisible();
+      await expect(root.getByTestId("throttle-value")).toBeVisible();
+    });
+
+    test("pressing Run again from finished starts a fresh run without a forced Reset (module-1)", async ({
+      page,
+    }) => {
       test.setTimeout(FINISH_TIMEOUT_MS * 2 + 5000);
       await page.goto("/");
-      await page.getByTestId("reset").click();
-      await runToFinish(page);
+      const root = page.getByTestId("module-1");
+      await root.scrollIntoViewIfNeeded();
+      await root.getByTestId("reset").click();
+      await runToFinish(root);
 
       // No Reset click here — Run must work directly from "finished".
-      await page.getByTestId("start-run").click();
+      await root.getByTestId("start-run").click();
       await expect(
-        page.getByTestId("state-label"),
+        root.getByTestId("state-label"),
         "Run from finished should leave the finished label for a fresh running state",
       ).not.toContainText("Finished");
-      expect(
-        await readNumber(page, "speed"),
-        "Run from finished should re-enter the corner at the documented entry speed",
-      ).toBeGreaterThan(5);
-
-      await expect(page.getByTestId("state-label")).toContainText("Finished", {
-        timeout: FINISH_TIMEOUT_MS,
-      });
+      expect(await readNumberIn(root, "speed"), "Run from finished should re-enter at the entry speed").toBeGreaterThan(
+        5,
+      );
+      await expect(root.getByTestId("state-label")).toContainText("Finished", { timeout: FINISH_TIMEOUT_MS });
     });
 
-    test("setting pickers are disabled only while a run is in progress", async ({ page }) => {
-      test.setTimeout(FINISH_TIMEOUT_MS + 5000);
-      await page.goto("/");
-      await page.getByTestId("reset").click();
-      await expect(page.getByTestId("drivetrain-fwd")).toBeEnabled();
-      await expect(page.getByTestId("throttle-intensity-full")).toBeEnabled();
-      await expect(page.getByTestId("track-hairpin-right")).toBeEnabled();
-
-      await page.getByTestId("start-run").click();
-      await expect(page.getByTestId("drivetrain-fwd")).toBeDisabled();
-      await expect(page.getByTestId("throttle-intensity-full")).toBeDisabled();
-      await expect(page.getByTestId("track-hairpin-right")).toBeDisabled();
-
-      await expect(page.getByTestId("state-label")).toContainText("Finished", {
-        timeout: FINISH_TIMEOUT_MS,
-      });
-      await expect(page.getByTestId("drivetrain-fwd")).toBeEnabled();
-      await expect(page.getByTestId("throttle-intensity-full")).toBeEnabled();
-      await expect(page.getByTestId("track-hairpin-right")).toBeEnabled();
-    });
-
-    test("all setting pickers and run controls remain keyboard-focusable", async ({ page }) => {
-      await page.goto("/");
-      for (const testid of [
-        "start-run",
-        "reset",
-        "drivetrain-fwd",
-        "drivetrain-rwd",
-        "drivetrain-awd",
-        "surface-dry",
-        "surface-wet",
-        "surface-ice",
-        "throttle-intensity-light",
-        "throttle-intensity-medium",
-        "throttle-intensity-full",
-        "throttle-timing-early",
-        "throttle-timing-mid",
-        "throttle-timing-late",
-        "track-sweep-left",
-        "track-sweep-right",
-        "track-hairpin-left",
-        "track-hairpin-right",
-      ]) {
-        await page.getByTestId(testid).focus();
-        await expect(page.getByTestId(testid)).toBeFocused();
-      }
-    });
-
-    test("selecting the hairpin track reaches saturation sooner than the sweep, same drivetrain/surface/throttle", async ({
+    test("reset returns a module's state, speed, and utilisation to the initial values (module-4)", async ({
       page,
     }) => {
-      test.setTimeout(MID_RUN_SAMPLE_MS * 2 + 8000);
+      test.setTimeout(FINISH_TIMEOUT_MS + 5000);
       await page.goto("/");
-      await page.getByTestId("throttle-intensity-full").click();
-      await page.getByTestId("throttle-timing-early").click();
+      const root = page.getByTestId("module-4");
+      await root.scrollIntoViewIfNeeded();
+      await root.getByTestId("reset").click();
+      const initialState = await root.getByTestId("state-label").textContent();
 
-      await page.getByTestId("track-sweep-right").click();
-      await page.getByTestId("reset").click();
-      await page.getByTestId("start-run").click();
-      await page.waitForTimeout(MID_RUN_SAMPLE_MS);
-      const sweepUtil = Math.max(
-        await readNumber(page, "front-utilisation"),
-        await readNumber(page, "rear-utilisation"),
-      );
-      await page.getByTestId("reset").click();
+      await runToFinish(root);
+      await root.getByTestId("reset").click();
 
-      await page.getByTestId("track-hairpin-right").click();
-      await page.getByTestId("reset").click();
-      await page.getByTestId("start-run").click();
-      await page.waitForTimeout(MID_RUN_SAMPLE_MS);
-      const hairpinUtil = Math.max(
-        await readNumber(page, "front-utilisation"),
-        await readNumber(page, "rear-utilisation"),
-      );
+      await expect(root.getByTestId("state-label")).toHaveText(initialState ?? "Ready");
+      expect(await readNumberIn(root, "front-utilisation")).toBeLessThan(5);
+      expect(await readNumberIn(root, "rear-utilisation")).toBeLessThan(5);
+      expect(await readNumberIn(root, "speed")).toBe(0);
+    });
 
-      expect(
-        hairpinUtil,
-        "the tighter hairpin should use more of the shared grip budget than the sweep over the identical script",
-      ).toBeGreaterThan(sweepUtil);
+    test("reduced motion still leaves every module runnable", async ({ page }) => {
+      test.setTimeout(FINISH_TIMEOUT_MS + 5000);
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.goto("/");
+      const root = page.getByTestId("module-1");
+      await root.scrollIntoViewIfNeeded();
+      await root.getByTestId("reset").click();
+      await runToFinish(root);
     });
   });
 }
@@ -407,13 +404,16 @@ test("survives a resize mid-run, keeping simulation state and no console errors"
     if (msg.type() === "error") errors.push(msg.text());
   });
   await page.goto("/");
-  await page.getByTestId("reset").click();
-  await page.getByTestId("start-run").click();
+  const root = page.getByTestId("module-1");
+  await root.scrollIntoViewIfNeeded();
+  await root.getByTestId("reset").click();
+  await root.getByTestId("start-run").click();
   await page.waitForTimeout(1000);
-  const before = await readNumber(page, "front-utilisation");
+  const before = await readNumberIn(root, "front-utilisation");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(100);
-  const after = await readNumber(page, "front-utilisation");
+  await root.scrollIntoViewIfNeeded();
+  const after = await readNumberIn(root, "front-utilisation");
 
   expect(errors, `console errors after mid-run resize: ${errors.join("; ")}`).toEqual([]);
   expect(
@@ -421,3 +421,7 @@ test("survives a resize mid-run, keeping simulation state and no console errors"
     "resizing mid-run should not reset or discontinuously jump the simulation state",
   ).toBeLessThan(30);
 });
+
+function _unusedTypeCheck(page: Page): void {
+  void page;
+}

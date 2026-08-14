@@ -1,17 +1,26 @@
 :root {
-  color-scheme: dark;
+  --color-front: #4fd3e6;
+  --color-rear: #d99a4e;
+  --color-danger: #ff6b57;
+  --font-system:
+    system-ui, -apple-system, "Segoe UI", roboto, "Helvetica Neue", arial, sans-serif;
 
+  /* Page-level chrome: warm, light, editorial. */
+  --page-bg: #f7f1e6;
+  --page-bg-alt: #efe4d2;
+  --page-text: #211d17;
+  --page-text-dim: #6d6457;
+  --page-border: rgb(20 15 5 / 12%);
+  --page-link: #0e6f7a;
+
+  /* Card-level chrome (unchanged dark dashboard theme, now scoped to
+     .experiment-card rather than the whole page). */
   --color-bg: #1a1d22;
   --color-bg-alt: #21252c;
   --color-panel: #23272f;
   --color-text: #f2efe8;
   --color-text-dim: #a8a49c;
   --color-border: rgb(255 255 255 / 12%);
-  --color-front: #4fd3e6;
-  --color-rear: #d99a4e;
-  --color-danger: #ff6b57;
-  --font-system:
-    system-ui, -apple-system, "Segoe UI", roboto, "Helvetica Neue", arial, sans-serif;
 }
 
 * {
@@ -21,37 +30,116 @@
 html,
 body {
   margin: 0;
-  height: 100%;
-  background: var(--color-bg);
-  color: var(--color-text);
+  min-height: 100%;
+  background: var(--page-bg);
+  color: var(--page-text);
   font-family: var(--font-system);
 }
 
-body {
-  overflow: hidden;
-}
-
 a {
-  color: var(--color-front);
+  color: var(--page-link);
 }
 
-.app {
-  display: flex;
-  flex-direction: column;
+h1,
+h2,
+h3 {
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+/* Visually hidden but screen-reader-accessible — used where a page needs a
+   real heading for the document-outline invariant (spec/invariants.test.ts)
+   but the visible headline lives elsewhere (e.g. the intro iframe's own
+   heading is redundant with index.html's .intro-copy headline above it). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.intro-canvas {
+  display: block;
+  width: 100%;
   height: 100%;
 }
 
-.brand-title {
+/* ---------------------------------------------------------------------
+   Intro: a near-fullscreen, sticky-pinned hero. #intro_container carries
+   extra scroll height beyond one viewport so #intro can stay pinned
+   (position: sticky) while the visitor scrolls through it; a vignette
+   grows via the --intro-shadow custom property (set by main.ts's scroll
+   listener) as module-1 approaches, cueing the transition the way a fixed
+   background in an explorable would, without any scroll-hijacking — the
+   browser's own scroll still drives everything, we only read its position.
+   ------------------------------------------------------------------- */
+/* stylelint-disable-next-line selector-id-pattern -- id is a fixed
+   spec/assignment-1.test.ts contract token ("#intro_container"), not a
+   naming-style choice. */
+#intro_container {
+  position: relative;
+  min-height: 160vh;
+}
+
+#intro {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  min-height: 100vh;
+  overflow: hidden;
   display: flex;
   align-items: center;
-  gap: 0.85rem;
-  margin: 0;
-  padding: 0.9rem 1rem;
-  font-size: 1.7rem;
-  font-weight: 800;
-  letter-spacing: 0.01em;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg-alt);
+  justify-content: center;
+  background: #0c0d10;
+}
+
+.intro-background {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  z-index: 0;
+}
+
+#intro::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent 35%, rgb(0 0 0 / 70%) 100%);
+  opacity: var(--intro-shadow, 0);
+  transition: opacity 120ms linear;
+}
+
+.intro-copy {
+  position: relative;
+  z-index: 2;
+  max-width: 40rem;
+  margin: 0 1.5rem;
+  padding: 2rem 2.25rem;
+  text-align: center;
+  color: #f7f4ec;
+  background: rgb(12 13 16 / 55%);
+  border-radius: 1rem;
+  backdrop-filter: blur(6px);
+}
+
+.intro-copy h1 {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0 0 0.85rem;
+  font-size: clamp(2rem, 5vw, 3.2rem);
 }
 
 .brand-logo {
@@ -59,79 +147,138 @@ a {
   height: 2.6rem;
   flex-shrink: 0;
 
-  /* The source PNG is solid black on a transparent background — invert it to
-     white so the mark reads against this dark theme instead of vanishing
-     into --color-bg-alt. */
+  /* The source PNG is solid black on a transparent background — invert it
+     to white so the mark reads against the intro's dark backdrop. */
   filter: invert(1);
 }
 
-.main-area {
-  flex: 1 1 auto;
-  display: flex;
-  min-height: 0;
+.intro-thesis {
+  margin: 0 0 1.4rem;
+  font-size: clamp(1.05rem, 2vw, 1.3rem);
+  line-height: 1.5;
+  color: #d8d3c6;
 }
 
-.stage {
+.scroll-cue {
+  margin: 0;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #a8a49c;
+  animation: scroll-cue-bob 1.8s ease-in-out infinite;
+}
+
+@keyframes scroll-cue-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(0.35rem);
+  }
+}
+
+/* ---------------------------------------------------------------------
+   Story modules: editorial copy above/beside a dark experiment card.
+   ------------------------------------------------------------------- */
+main {
   position: relative;
-  flex: 1 1 auto;
-  min-width: 0;
+  z-index: 2;
+  background: var(--page-bg);
+}
+
+.story-module,
+.sandbox {
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: 5rem 1.5rem;
+}
+
+.story-module + .story-module,
+.sandbox {
+  border-top: 1px solid var(--page-border);
+}
+
+.story-copy {
+  max-width: 38rem;
+  margin: 0 0 2rem;
+}
+
+.story-copy h2 {
+  font-size: clamp(1.5rem, 3vw, 2.1rem);
+  margin: 0 0 0.85rem;
+}
+
+.story-copy p {
+  font-size: 1.08rem;
+  line-height: 1.6;
+  color: var(--page-text-dim);
+  margin: 0;
+}
+
+.story-explanation {
+  max-width: 38rem;
+  margin: 1.75rem 0 0;
+  font-size: 1.05rem;
+  line-height: 1.55;
+  font-style: italic;
+  color: var(--page-text-dim);
+}
+
+.experiment-card {
+  color-scheme: dark;
+  background: var(--color-bg);
+  color: var(--color-text);
+  border-radius: 1rem;
+  padding: 1.1rem;
+  box-shadow: 0 18px 40px -20px rgb(20 15 5 / 45%);
+}
+
+.experiment-stage {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  min-height: 220px;
+  border-radius: 0.6rem;
+  overflow: hidden;
   background: var(--color-bg);
 }
 
-.stage canvas {
+.experiment-stage canvas {
   display: block;
   width: 100%;
   height: 100%;
 }
 
-.sidebar {
-  flex: 0 0 34%;
-  max-width: 34%;
-  overflow-y: auto;
-  padding: 0.75rem;
-  border-left: 1px solid var(--color-border);
-  background: var(--color-bg-alt);
-  display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
-}
-
-/* Groups State/Motion/Axle/G-G into one flex item of .sidebar (for the
-   IntersectionObserver in instruments.ts to watch as a single unit). Gap is
-   intentionally tighter than .sidebar's own 0.9rem gap — headroom this group
-   needs to ever be "fully visible" at the 390x844 marking viewport shrank
-   once the header and sticky bar both grew, so this spacing is compressed to
-   make that room back, per the brief's own "compress a secondary display
-   detail" trade-off rather than shrinking the header or sticky bar. */
-.key-info {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
-.panel {
-  background: var(--color-panel);
+.module-overlay {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  background: rgb(26 29 34 / 78%);
   border: 1px solid var(--color-border);
   border-radius: 0.5rem;
-  padding: 0.65rem 0.75rem;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
 }
 
-.panel h2 {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-dim);
-  margin: 0 0 0.4rem;
+.module-overlay p {
+  margin: 0.15rem 0;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
 }
 
-#state-label {
-  font-size: 1.3rem;
+.module-overlay .state-label {
+  font-size: 1.05rem;
   font-weight: 700;
   margin: 0 0 0.25rem;
 }
 
-/* Shared by the real #state-label and its sticky-bar mirror, so both read
-   the same colour for a given driving state. */
+.state-label[data-state="ready"] {
+  color: var(--color-text-dim);
+}
+
+.state-label[data-state="finished"],
 .state-label[data-state="stable"] {
   color: var(--color-text);
 }
@@ -148,110 +295,34 @@ a {
   color: var(--color-danger);
 }
 
-#state-explanation {
+#state-explanation,
+[data-testid="state-explanation"] {
   margin: 0;
   color: var(--color-text-dim);
   font-size: 0.85rem;
   line-height: 1.4;
 }
 
-.axle-row {
+.module-controls {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin: 0.4rem 0;
-}
-
-.axle-row .axle-name {
-  width: 3.4rem;
-  font-size: 0.8rem;
-  flex-shrink: 0;
-}
-
-.axle-row.front .axle-name {
-  color: var(--color-front);
-}
-
-.axle-row.rear .axle-name {
-  color: var(--color-rear);
-}
-
-.meter {
-  flex: 1 1 auto;
-  height: 0.6rem;
-  background: var(--color-bg);
-  border-radius: 999px;
-  overflow: hidden;
-  border: 1px solid var(--color-border);
-}
-
-.meter-fill {
-  height: 100%;
-  width: 0%;
-  background: var(--color-front);
-  transition: width 60ms linear;
-}
-
-.axle-row.rear .meter-fill {
-  background: var(--color-rear);
-}
-
-.axle-row .meter-fill[data-saturated="true"] {
-  background: var(--color-danger);
-}
-
-.axle-row .axle-value {
-  width: 3.6rem;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  font-size: 0.8rem;
-  flex-shrink: 0;
-}
-
-.gg-display {
-  display: flex;
-  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 0.75rem;
-}
-
-.gg-display canvas {
-  width: 5.5rem;
-  height: 5.5rem;
-  background: var(--color-bg);
-  border-radius: 50%;
-  border: 1px solid var(--color-border);
-}
-
-.gg-readouts p {
-  margin: 0.15rem 0;
-  font-size: 0.8rem;
-  font-variant-numeric: tabular-nums;
-}
-
-fieldset {
-  border: none;
-  margin: 0 0 0.6rem;
-  padding: 0;
-}
-
-fieldset legend {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-dim);
-  padding: 0;
-  margin-bottom: 0.3rem;
+  margin-top: 0.9rem;
 }
 
 .option-group {
   display: flex;
   gap: 0.4rem;
+  flex-wrap: wrap;
 }
 
 .option-button {
   flex: 1 1 auto;
   min-height: 2.5rem;
-  background: var(--color-bg);
+  padding: 0 0.9rem;
+  background: var(--color-bg-alt);
   color: var(--color-text);
   border: 1px solid var(--color-border);
   border-radius: 0.4rem;
@@ -271,6 +342,182 @@ fieldset legend {
   outline-offset: 1px;
 }
 
+.option-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.run-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.run-button {
+  min-height: 2.6rem;
+  padding: 0 1.3rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-front);
+  background: var(--color-front);
+  color: #0c1214;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.run-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.run-button:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: 2px;
+}
+
+.reset-button {
+  min-height: 2.6rem;
+  padding: 0 0.9rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--color-text-dim);
+  font-family: inherit;
+  font-size: 0.85rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.reset-button:focus-visible {
+  outline: 2px solid var(--color-front);
+  outline-offset: 2px;
+}
+
+.module-result {
+  min-height: 1.4em;
+  margin: 0.85rem 0 0;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+
+/* ---------------------------------------------------------------------
+   Sandbox: mad-libs sentence, disclosures, full telemetry panel.
+   ------------------------------------------------------------------- */
+.sandbox-sentence {
+  font-size: clamp(1.1rem, 2.4vw, 1.4rem);
+  line-height: 2.1;
+  margin: 0 0 1rem;
+}
+
+.sentence-select {
+  font: inherit;
+  font-weight: 700;
+  color: var(--color-front);
+  background: var(--color-bg-alt);
+  border: 1px solid var(--color-border);
+  border-radius: 0.35rem;
+  padding: 0.1rem 0.4rem;
+  margin: 0 0.15rem;
+}
+
+.sentence-select:focus-visible {
+  outline: 2px solid var(--color-front);
+  outline-offset: 1px;
+}
+
+details.advanced-setup,
+details.telemetry {
+  margin: 0.9rem 0;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  background: var(--color-bg-alt);
+}
+
+details.advanced-setup summary,
+details.telemetry summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+details.advanced-setup label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--color-text-dim);
+}
+
+.panel {
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  padding: 0.65rem 0.75rem;
+}
+
+.panel h3 {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-dim);
+  margin: 0 0 0.4rem;
+}
+
+.panel p {
+  margin: 0.25rem 0;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+details.telemetry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+details.telemetry .panel {
+  margin-top: 0.6rem;
+}
+
+details.telemetry .panel:first-of-type {
+  margin-top: 0.75rem;
+}
+
+.axle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.3rem 0;
+}
+
+.axle-row .axle-name {
+  width: 3.4rem;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.axle-row.front .axle-name {
+  color: var(--color-front);
+}
+
+.axle-row.rear .axle-name {
+  color: var(--color-rear);
+}
+
+.axle-row .axle-value {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+}
+
+details.panel[data-testid="model-assumptions"] {
+  margin-top: 0.9rem;
+}
+
 details.panel summary {
   cursor: pointer;
   font-size: 0.8rem;
@@ -283,199 +530,36 @@ details.panel p {
   color: var(--color-text-dim);
 }
 
-.control-bar {
-  position: relative;
-  flex: 0 0 auto;
-  border-top: 1px solid var(--color-border);
-  background: var(--color-bg-alt);
-}
-
-/* Rises from the bottom as an absolutely-positioned overlay anchored just
-   above .control-bar-main, not as a layout-flow row — growing it must never
-   shrink .main-area/.sidebar. An earlier version grew this row inside
-   normal flow (pushing .main-area up), which created a real feedback loop
-   at the 390x844 marking viewport: growing the sticky row shrank .sidebar's
-   available height below what the key-info group needs, so once expanded
-   it could never again satisfy "fully visible" and got stuck expanded
-   forever, even scrolled fully back to the top (see git history). The
-   overlay keeps .sidebar's own height constant regardless of this row's
-   state, which removes that circular dependency entirely. The mirrored
-   content includes real meter bars and a mini G-G canvas (not just
-   numbers), so this cap is taller than a single text line — sized to the
-   tallest wrapped layout at the 390x844 marking viewport, verified against
-   measured content height. */
-.control-bar-sticky {
-  position: absolute;
-  right: 0;
-  bottom: 100%;
-  left: 0;
-  max-height: 0;
-  overflow: hidden;
-  background: var(--color-bg-alt);
-  box-shadow: 0 -6px 16px rgb(0 0 0 / 30%);
-  transition: max-height 220ms ease;
-
-  /* Purely a read-only mirror (aria-hidden, no interactive children) that
-     now floats on top of whatever .sidebar content is scrolled underneath
-     it — must never intercept clicks meant for that real content. */
-  pointer-events: none;
-}
-
-.control-bar[data-expanded="true"] .control-bar-sticky {
-  max-height: 10rem;
-}
-
-.control-bar-sticky-inner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 1.25rem;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.sticky-state {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  min-width: 6.5rem;
-}
-
-.sticky-state-label {
-  font-size: 0.95rem;
-}
-
-.sticky-speed {
-  margin: 0;
-  font-size: 0.75rem;
-  color: var(--color-text-dim);
-  font-variant-numeric: tabular-nums;
-}
-
-.sticky-axles {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  flex: 1 1 10rem;
-  min-width: 10rem;
-}
-
-.sticky-axles .axle-row {
-  margin: 0;
-}
-
-.sticky-gg {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-}
-
-.sticky-gg canvas {
-  width: 3.2rem;
-  height: 3.2rem;
-  background: var(--color-bg);
-  border-radius: 50%;
-  border: 1px solid var(--color-border);
-  flex-shrink: 0;
-}
-
-.sticky-gg .gg-readouts p {
-  margin: 0.1rem 0;
-  font-size: 0.72rem;
-  color: var(--color-text-dim);
-  font-variant-numeric: tabular-nums;
-}
-
-.control-bar-main {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.45rem 0.75rem;
-  flex-wrap: wrap;
-}
-
-.drive-button {
-  min-width: 3.2rem;
-  min-height: 3.2rem;
-  border-radius: 0.6rem;
-  border: 1px solid var(--color-border);
-  background: var(--color-panel);
-  color: var(--color-text);
-  font-size: 1.2rem;
-  font-family: inherit;
-  cursor: pointer;
-  touch-action: none;
-  user-select: none;
-}
-
-.drive-button:active,
-.drive-button[data-held="true"] {
-  background: var(--color-front);
-  color: var(--color-bg);
-}
-
-#brake:active,
-#brake[data-held="true"] {
-  background: var(--color-danger);
-}
-
-.drive-button:focus-visible {
-  outline: 2px solid var(--color-front);
-  outline-offset: 2px;
-}
-
-#reset {
-  min-height: 3.2rem;
-  border-radius: 0.6rem;
-  border: 1px solid var(--color-border);
-  background: var(--color-panel);
-  color: var(--color-text);
-  font-family: inherit;
-  font-size: 0.85rem;
-  padding: 0 0.9rem;
-  cursor: pointer;
-}
-
-.control-readouts {
-  margin-left: auto;
-  display: flex;
-  gap: 0.7rem;
-  font-size: 0.75rem;
-  color: var(--color-text-dim);
-  font-variant-numeric: tabular-nums;
-}
-
+/* ---------------------------------------------------------------------
+   Responsive: stack copy above the card, keep the stage tall enough to
+   read the car/path on a phone-width viewport.
+   ------------------------------------------------------------------- */
 @media (width <= 820px) {
-  .main-area {
+  .story-module,
+  .sandbox {
+    padding: 3.25rem 1.1rem;
+  }
+
+  .experiment-stage {
+    aspect-ratio: 4 / 3;
+  }
+
+  .module-controls {
     flex-direction: column;
+    align-items: stretch;
   }
 
-  .stage {
-    flex: 1 1 42%;
-    min-height: 220px;
-  }
-
-  .sidebar {
-    flex: 1 1 auto;
-    max-width: none;
-    border-left: none;
-    border-top: 1px solid var(--color-border);
-  }
-
-  .control-readouts {
-    margin-left: 0;
-    width: 100%;
+  .run-controls {
     justify-content: space-between;
-    order: 10;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .meter-fill {
-    transition: none;
+  .scroll-cue {
+    animation: none;
   }
 
-  .control-bar-sticky {
+  #intro::after {
     transition: none;
   }
 }

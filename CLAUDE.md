@@ -216,14 +216,63 @@ the agent from drifting off that idea or breaking the harness that tests it.
   label/explanation, front/rear utilisation, longitudinal/lateral G,
   steering/throttle telemetry) is the non-visual truth of the page; a
   canvas-only representation of any of that state is not acceptable,
-  canvas-unavailable or not.
+  canvas-unavailable or not. This is now a **per-module** contract, not a
+  page-global one: the same short testids (`start-run`, `reset`,
+  `state-label`, `front-utilisation`, …) exist once inside every teaching
+  module and once inside the sandbox, scoped by each container's own
+  `module-1`…`module-5`/`sandbox` testid — always query
+  `container.getByTestId(x)`, never a bare page-level `getByTestId(x)`, or
+  Playwright's strict mode correctly rejects the ambiguous match.
+- **The page is a progressive scrolling explorable, not a single always-
+  visible dashboard** (`spec/brief.md`). The intro shows only its own thesis
+  and scroll cue; nothing below it is visible or interactive on the first
+  screen. Below the intro, five teaching modules in a fixed order each
+  expose **exactly one** editable variable (its own single `SettingSource`
+  group) with every other variable fixed to a documented baseline for that
+  module — a module that grows a second editable variable, or that repeats
+  the full telemetry panel, has drifted off this structure. Full freedom to
+  combine all five variables exists **only** in the final sandbox.
+- **Every teaching module and the sandbox is its own independent experiment
+  instance, built by the single `createExperimentController` factory
+  (`src/experiments/controller.ts`)** — its own `SimState`, its own
+  fixed-timestep accumulator loop, its own `GripScene | null`, scoped to its
+  own DOM subtree. Changing or running one instance must never touch
+  another's displayed state; don't reintroduce module-level globals shared
+  across instances (that's exactly what this factory replaced — see git
+  history), and don't duplicate `src/simulation/` calls inside a module
+  instead of going through the shared factory.
+- **An experiment instance scrolled out of view must pause its physics
+  stepping, and, if it stays out of view, release its WebGL context** — this
+  is what keeps scrolling through five-plus experiments from running that
+  many WebGL scenes at 60fps in the background. `createExperimentController`
+  wires this via one `IntersectionObserver` per instance (`pause()`/
+  `resume()` on intersection change, `unmount()`/`dispose()` after
+  `UNMOUNT_DELAY_MS` further offscreen, remounting from the same in-memory
+  `SimState` with no time jump or lost state on scroll-back). Any future
+  change to an instance's lifecycle must keep this pause/release behaviour,
+  and must be checked by actually scrolling a running module offscreen and
+  back, not just by reading the code.
+- **A module's conclusion text must be computed from that run's own real
+  final `SimState`**, never a pre-written line that merely looks
+  data-driven. `src/experiments/conclusions.ts`'s per-module functions read
+  the actual settled `SimState` (peak utilisation, which axle saturated,
+  elapsed time) passed in via `onFinish`; a conclusion that would print the
+  same text regardless of the run's actual outcome has failed this rule even
+  if it happens to read plausibly.
 - **The scene is a real Three.js/WebGL 3D scene, not a 2D canvas trick.**
   This is a deliberate reversal of an earlier decision (see git history) —
   the car, road, and trackside scenery are genuine 3D geometry, lit and
   shadowed, not projected/billboarded onto a flat canvas. Any 3D asset added
-  to `public/assets/` must be a curated, individually-inspected CC0 file
-  (Kenney packs so far) — never a whole downloaded pack, and never a model
-  whose licence hasn't been checked. Document every retained file in
+  to `src/rendering/assets/` must be a curated, individually-inspected CC0
+  file (Kenney packs so far) — never a whole downloaded pack, and never a
+  model whose licence hasn't been checked. These assets live under
+  `src/rendering/` rather than `public/` specifically so every reference goes
+  through Vite's `new URL('literal/relative/path', import.meta.url)` static
+  asset pipeline — see `asset-loader.ts`'s `ASSET_PATHS` comment for why a
+  plain `public/`-relative string breaks for any page not at the site root
+  (e.g. `play/intro/intro.html`), and why that `new URL(...)` call must stay
+  a literal per-file call, never built from a shared base variable. Document
+  every retained file in
   `docs/asset-sources.md` (original filename, local filename, provider,
   source URL, download date, licence, conversion notes) in the same commit
   that adds it. Never guess a glTF scene graph's node names (e.g. wheel

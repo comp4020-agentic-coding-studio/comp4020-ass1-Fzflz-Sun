@@ -429,3 +429,110 @@ describe("G. track choice changes saturation timing — hairpin vs. sweep", () =
     expect(hairpinSaturates).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// H. Each teaching module in the progressive explorable fixes four of the
+// five variables and exposes exactly one — this pins down the SPECIFIC
+// fixed/variable tuple each module is wired to (see spec/brief.md), not just
+// "some" combination that happens to show the effect, and proves that exact
+// tuple is both comparatively meaningful and bit-for-bit deterministic (a
+// module's Run/Reset must always reproduce the same conclusion).
+// ---------------------------------------------------------------------------
+describe("H. per-module fixed/variable tuples match the shipped teaching modules", () => {
+  const CAP_STEPS = Math.round(constants.SAFETY_CAP_SECONDS / FIXED_TIMESTEP);
+  // Same sampling window as section D's saturatedRun/unsaturatedRun, and for
+  // the same reason: run all the way to CAP_STEPS (SAFETY_CAP_SECONDS) and a
+  // saturated car has usually already run wide, bounced off the barrier, and
+  // entered a long chaotic slide/recovery — real, but not an orderly A>B
+  // comparison anymore. Sampling mid-run, right after each preset's ramps
+  // have settled, is where the single-variable contrast is actually legible.
+  const SAMPLE_STEPS = 400;
+
+  function sampledRun(
+    drivetrain: DrivetrainId,
+    surface: SurfaceId,
+    throttleIntensity: ThrottleIntensityId,
+    throttleTiming: ThrottleTimingId,
+    track: TrackId,
+  ): SimState {
+    return driveAuto(
+      startedRun(drivetrain, surface, throttleIntensity, throttleTiming, track),
+      throttleIntensity,
+      throttleTiming,
+      SAMPLE_STEPS,
+    );
+  }
+
+  it("module 1 (corner): RWD/dry/medium/early, sweep vs hairpin — hairpin uses more of the grip budget, both deterministic", () => {
+    const sweep = sampledRun("RWD", "dry", "medium", "early", "sweep-right");
+    const hairpin = sampledRun("RWD", "dry", "medium", "early", "hairpin-right");
+    expect(Math.max(hairpin.front.utilisation, hairpin.rear.utilisation)).toBeGreaterThan(
+      Math.max(sweep.front.utilisation, sweep.rear.utilisation),
+    );
+    expect(sampledRun("RWD", "dry", "medium", "early", "sweep-right")).toEqual(sweep);
+    expect(sampledRun("RWD", "dry", "medium", "early", "hairpin-right")).toEqual(hairpin);
+  });
+
+  it("module 2 (surface): RWD/sweep-right/full/early, dry vs wet vs ice — lower grip shows more body slip over the identical script, deterministic", () => {
+    const dry = sampledRun("RWD", "dry", "full", "early", "sweep-right");
+    const wet = sampledRun("RWD", "wet", "full", "early", "sweep-right");
+    const ice = sampledRun("RWD", "ice", "full", "early", "sweep-right");
+    expect(Math.abs(wet.vy)).toBeGreaterThanOrEqual(Math.abs(dry.vy));
+    expect(Math.abs(ice.vy)).toBeGreaterThanOrEqual(Math.abs(wet.vy));
+    expect(sampledRun("RWD", "ice", "full", "early", "sweep-right")).toEqual(ice);
+  });
+
+  it("module 3 (throttle intensity): RWD/sweep-right/dry/early, light vs full — full loads the rear axle harder, deterministic", () => {
+    const light = sampledRun("RWD", "dry", "light", "early", "sweep-right");
+    const full = sampledRun("RWD", "dry", "full", "early", "sweep-right");
+    expect(full.rear.utilisation).toBeGreaterThan(light.rear.utilisation);
+    expect(sampledRun("RWD", "dry", "full", "early", "sweep-right")).toEqual(full);
+  });
+
+  it("module 4 (drivetrain): sweep-right/dry/full/early, FWD vs RWD vs AWD — which axle saturates first flips, AWD delays it, deterministic", () => {
+    // Compares WHICH axle crosses saturated=true first, and at what step —
+    // not a fixed-step utilisation snapshot. Past first saturation the two
+    // axles couple (a sliding rear feeds extra slip angle to the front too,
+    // and vice versa), so a later snapshot's raw utilisation numbers no
+    // longer isolate "which axle drivetrain choice loaded" the way the
+    // moment of first saturation does.
+    function firstSaturation(drivetrain: DrivetrainId): { step: number; frontSaturatedFirst: boolean } {
+      let state = startedRun(drivetrain, "dry", "full", "early", "sweep-right");
+      for (let i = 1; i <= CAP_STEPS; i++) {
+        const controls = controlsForState(state, CAR_PARAMS, FIXED_TIMESTEP);
+        state = step(state, controls, FIXED_TIMESTEP);
+        if (state.front.saturated || state.rear.saturated) {
+          return { step: i, frontSaturatedFirst: state.front.saturated };
+        }
+      }
+      return { step: Number.POSITIVE_INFINITY, frontSaturatedFirst: false };
+    }
+    const fwd = firstSaturation("FWD");
+    const rwd = firstSaturation("RWD");
+    const awd = firstSaturation("AWD");
+    expect(fwd.frontSaturatedFirst, "FWD should saturate its own front axle first").toBe(true);
+    expect(rwd.frontSaturatedFirst, "RWD should saturate its own rear axle first").toBe(false);
+    expect(awd.step, "AWD should delay saturation later than the sooner of FWD/RWD, not eliminate it").toBeGreaterThan(
+      Math.min(fwd.step, rwd.step),
+    );
+    expect(awd.step).toBeLessThan(Number.POSITIVE_INFINITY);
+
+    const full = sampledRun("AWD", "dry", "full", "early", "sweep-right");
+    expect(sampledRun("AWD", "dry", "full", "early", "sweep-right")).toEqual(full);
+  });
+
+  it("module 5 (throttle timing): RWD/sweep-right/dry/full, early vs late — early reaches saturation sooner, deterministic", () => {
+    function stepsToSaturation(throttleTiming: ThrottleTimingId): number {
+      let state = startedRun("RWD", "dry", "full", throttleTiming, "sweep-right");
+      for (let i = 1; i <= CAP_STEPS; i++) {
+        const controls = controlsForState(state, CAR_PARAMS, FIXED_TIMESTEP);
+        state = step(state, controls, FIXED_TIMESTEP);
+        if (state.front.saturated || state.rear.saturated) return i;
+      }
+      return Number.POSITIVE_INFINITY;
+    }
+    expect(stepsToSaturation("early")).toBeLessThan(stepsToSaturation("late"));
+    const early = sampledRun("RWD", "dry", "full", "early", "sweep-right");
+    expect(sampledRun("RWD", "dry", "full", "early", "sweep-right")).toEqual(early);
+  });
+});

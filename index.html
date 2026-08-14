@@ -7,310 +7,458 @@
     <link rel="stylesheet" href="./src/styles/main.css" />
   </head>
   <body>
-    <div class="app">
-      <nav aria-label="Primary"></nav>
-      <h1 class="brand-title">
-        <img src="/assets/brand/slippery-road.png" alt="" class="brand-logo" />
-        <span>Grip is a budget</span>
-      </h1>
-      <div class="main-area">
-        <div class="stage" data-testid="stage">
-          <canvas data-testid="scene-canvas"></canvas>
-        </div>
-        <aside class="sidebar">
-          <div class="key-info" data-testid="key-info">
-            <section class="panel" aria-live="polite">
-              <h2>State</h2>
-              <p id="state-label" data-testid="state-label" data-state="stable" class="state-label">Stable</p>
-              <p data-testid="state-explanation" id="state-explanation">
-                Both axles have grip in reserve. Nothing has saturated yet.
-              </p>
-            </section>
+    <nav aria-label="Primary"></nav>
 
+    <div id="intro_container" data-testid="intro_container">
+      <div id="intro">
+        <iframe
+          id="intro_background"
+          class="intro-background"
+          src="./play/intro/intro.html"
+          title="Scripted preview: a car saturating its grip budget through a hairpin"
+          aria-hidden="true"
+          tabindex="-1"
+        ></iframe>
+        <div class="intro-copy">
+          <h1>
+            <img src="./assets/brand/slippery-road.png" alt="" class="brand-logo" />
+            <span>Grip is a budget</span>
+          </h1>
+          <p class="intro-thesis">
+            Every tyre has one finite supply of force. Turning and accelerating spend it together.
+          </p>
+          <p class="scroll-cue">Scroll to experiment ↓</p>
+        </div>
+      </div>
+    </div>
+
+    <main>
+      <section class="story-module" data-testid="module-1" data-module="corner">
+        <div class="story-copy">
+          <h2>Does the shape of the corner change how much grip it needs?</h2>
+          <p>
+            Same car, same drivetrain, same surface, same throttle. Only the corner changes — a
+            wide sweep or a tight hairpin. Press Run and watch how much of each axle's grip
+            budget the corner alone spends.
+          </p>
+        </div>
+        <div class="experiment-card">
+          <div class="experiment-stage">
+            <canvas data-testid="scene-canvas"></canvas>
+            <div class="module-overlay">
+              <p data-testid="state-label" data-state="ready" class="state-label">Ready</p>
+              <p>
+                Front <span data-testid="front-utilisation">0%</span> · Rear
+                <span data-testid="rear-utilisation">0%</span>
+              </p>
+              <p>Speed: <span data-testid="speed">0.0 m/s</span></p>
+            </div>
+          </div>
+          <div class="module-controls">
+            <div class="option-group" role="group" aria-label="Corner">
+              <button
+                type="button"
+                class="option-button"
+                data-testid="track-sweep-right"
+                data-value="sweep-right"
+                aria-pressed="true"
+              >
+                Sweep
+              </button>
+              <button
+                type="button"
+                class="option-button"
+                data-testid="track-hairpin-right"
+                data-value="hairpin-right"
+                aria-pressed="false"
+              >
+                Hairpin
+              </button>
+            </div>
+            <div class="run-controls">
+              <button type="button" class="run-button" data-testid="start-run">Run</button>
+              <button type="button" class="reset-button" data-testid="reset">Reset</button>
+            </div>
+          </div>
+          <p class="module-result" data-testid="module-result" aria-live="polite"></p>
+        </div>
+        <p class="story-explanation">
+          The corner is only half the budget. Next: what if the road itself has less grip to give?
+        </p>
+      </section>
+
+      <section class="story-module" data-testid="module-2" data-module="surface">
+        <div class="story-copy">
+          <h2>Does the road surface change how far that same budget stretches?</h2>
+          <p>
+            Same corner, same car, same throttle. Only the surface changes. Ice and wet tarmac
+            start with a smaller total grip budget than dry tarmac — watch how much sooner it
+            runs out.
+          </p>
+        </div>
+        <div class="experiment-card">
+          <div class="experiment-stage">
+            <canvas data-testid="scene-canvas"></canvas>
+            <div class="module-overlay">
+              <p data-testid="state-label" data-state="ready" class="state-label">Ready</p>
+              <p>
+                Front <span data-testid="front-utilisation">0%</span> · Rear
+                <span data-testid="rear-utilisation">0%</span>
+              </p>
+              <p>Speed: <span data-testid="speed">0.0 m/s</span></p>
+            </div>
+          </div>
+          <div class="module-controls">
+            <div class="option-group" role="group" aria-label="Surface">
+              <button
+                type="button"
+                class="option-button"
+                data-testid="surface-dry"
+                data-value="dry"
+                aria-pressed="true"
+              >
+                Dry
+              </button>
+              <button
+                type="button"
+                class="option-button"
+                data-testid="surface-wet"
+                data-value="wet"
+                aria-pressed="false"
+              >
+                Wet
+              </button>
+              <button
+                type="button"
+                class="option-button"
+                data-testid="surface-ice"
+                data-value="ice"
+                aria-pressed="false"
+              >
+                Ice
+              </button>
+            </div>
+            <div class="run-controls">
+              <button type="button" class="run-button" data-testid="start-run">Run</button>
+              <button type="button" class="reset-button" data-testid="reset">Reset</button>
+            </div>
+          </div>
+          <p class="module-result" data-testid="module-result" aria-live="polite"></p>
+        </div>
+        <p class="story-explanation">
+          Surface sets the size of the budget. Next: what if you simply ask for more of it, sooner?
+        </p>
+      </section>
+
+      <section class="story-module" data-testid="module-3" data-module="throttle-intensity">
+        <div class="story-copy">
+          <h2>Does accelerating harder out of the corner cost extra grip?</h2>
+          <p>
+            Same corner, same surface. Only how hard you accelerate changes. Watch the rear axle
+            especially — throttle draws from the same rear grip the corner is already spending on
+            turning.
+          </p>
+        </div>
+        <div class="experiment-card">
+          <div class="experiment-stage">
+            <canvas data-testid="scene-canvas"></canvas>
+            <div class="module-overlay">
+              <p data-testid="state-label" data-state="ready" class="state-label">Ready</p>
+              <p>
+                Front <span data-testid="front-utilisation">0%</span> · Rear
+                <span data-testid="rear-utilisation">0%</span>
+              </p>
+              <p>Speed: <span data-testid="speed">0.0 m/s</span></p>
+            </div>
+          </div>
+          <div class="module-controls">
+            <div class="option-group" role="group" aria-label="Throttle intensity">
+              <button
+                type="button"
+                class="option-button"
+                data-testid="throttle-intensity-light"
+                data-value="light"
+                aria-pressed="false"
+              >
+                Light
+              </button>
+              <button
+                type="button"
+                class="option-button"
+                data-testid="throttle-intensity-medium"
+                data-value="medium"
+                aria-pressed="true"
+              >
+                Medium
+              </button>
+              <button
+                type="button"
+                class="option-button"
+                data-testid="throttle-intensity-full"
+                data-value="full"
+                aria-pressed="false"
+              >
+                Full
+              </button>
+            </div>
+            <div class="run-controls">
+              <button type="button" class="run-button" data-testid="start-run">Run</button>
+              <button type="button" class="reset-button" data-testid="reset">Reset</button>
+            </div>
+          </div>
+          <p class="module-result" data-testid="module-result" aria-live="polite"></p>
+        </div>
+        <p class="story-explanation">
+          Intensity isn't the only throttle variable. Next: does which wheels drive change
+          anything?
+        </p>
+      </section>
+
+      <section class="story-module" data-testid="module-4" data-module="drivetrain">
+        <div class="story-copy">
+          <h2>Does which wheels drive change which axle runs out of grip first?</h2>
+          <p>
+            Same corner, same surface, same throttle. Only the drivetrain changes — front, rear,
+            or all wheels. Watch which axle saturates first, and whether AWD avoids saturation
+            altogether or only delays it.
+          </p>
+        </div>
+        <div class="experiment-card">
+          <div class="experiment-stage">
+            <canvas data-testid="scene-canvas"></canvas>
+            <div class="module-overlay">
+              <p data-testid="state-label" data-state="ready" class="state-label">Ready</p>
+              <p>
+                Front <span data-testid="front-utilisation">0%</span> · Rear
+                <span data-testid="rear-utilisation">0%</span>
+              </p>
+              <p>Speed: <span data-testid="speed">0.0 m/s</span></p>
+            </div>
+          </div>
+          <div class="module-controls">
+            <div class="option-group" role="group" aria-label="Drivetrain">
+              <button
+                type="button"
+                class="option-button"
+                data-testid="drivetrain-fwd"
+                data-value="FWD"
+                aria-pressed="false"
+              >
+                FWD
+              </button>
+              <button
+                type="button"
+                class="option-button"
+                data-testid="drivetrain-rwd"
+                data-value="RWD"
+                aria-pressed="true"
+              >
+                RWD
+              </button>
+              <button
+                type="button"
+                class="option-button"
+                data-testid="drivetrain-awd"
+                data-value="AWD"
+                aria-pressed="false"
+              >
+                AWD
+              </button>
+            </div>
+            <div class="run-controls">
+              <button type="button" class="run-button" data-testid="start-run">Run</button>
+              <button type="button" class="reset-button" data-testid="reset">Reset</button>
+            </div>
+          </div>
+          <p class="module-result" data-testid="module-result" aria-live="polite"></p>
+        </div>
+        <p class="story-explanation">
+          Drivetrain moves the load between axles — it doesn't create more grip. Last variable:
+          timing.
+        </p>
+      </section>
+
+      <section class="story-module" data-testid="module-5" data-module="throttle-timing">
+        <div class="story-copy">
+          <h2>Does applying the same throttle earlier or later in the corner change the outcome?</h2>
+          <p>
+            Same corner, same surface, same throttle intensity. Only the timing changes — before
+            the apex, at the apex, or on exit. Watch how soon combined demand peaks.
+          </p>
+        </div>
+        <div class="experiment-card">
+          <div class="experiment-stage">
+            <canvas data-testid="scene-canvas"></canvas>
+            <div class="module-overlay">
+              <p data-testid="state-label" data-state="ready" class="state-label">Ready</p>
+              <p>
+                Front <span data-testid="front-utilisation">0%</span> · Rear
+                <span data-testid="rear-utilisation">0%</span>
+              </p>
+              <p>Speed: <span data-testid="speed">0.0 m/s</span></p>
+            </div>
+          </div>
+          <div class="module-controls">
+            <div class="option-group" role="group" aria-label="Throttle timing">
+              <button
+                type="button"
+                class="option-button"
+                data-testid="throttle-timing-early"
+                data-value="early"
+                aria-pressed="true"
+              >
+                Before apex
+              </button>
+              <button
+                type="button"
+                class="option-button"
+                data-testid="throttle-timing-mid"
+                data-value="mid"
+                aria-pressed="false"
+              >
+                At apex
+              </button>
+              <button
+                type="button"
+                class="option-button"
+                data-testid="throttle-timing-late"
+                data-value="late"
+                aria-pressed="false"
+              >
+                On exit
+              </button>
+            </div>
+            <div class="run-controls">
+              <button type="button" class="run-button" data-testid="start-run">Run</button>
+              <button type="button" class="reset-button" data-testid="reset">Reset</button>
+            </div>
+          </div>
+          <p class="module-result" data-testid="module-result" aria-live="polite"></p>
+        </div>
+        <p class="story-explanation">
+          You've now seen every variable alone. The sandbox below lets you combine all five and
+          watch the same budget respond.
+        </p>
+      </section>
+
+      <section class="sandbox" data-testid="sandbox">
+        <div class="story-copy">
+          <h2>Now combine them all</h2>
+          <p>Build your own scenario, one clause at a time, then run it.</p>
+        </div>
+        <div class="experiment-card">
+          <p class="sandbox-sentence">
+            Drive a
+            <select data-testid="drivetrain-select" class="sentence-select">
+              <option value="FWD">front-wheel-drive</option>
+              <option value="RWD" selected>rear-wheel-drive</option>
+              <option value="AWD">all-wheel-drive</option>
+            </select>
+            car on a
+            <select data-testid="surface-select" class="sentence-select">
+              <option value="dry" selected>dry</option>
+              <option value="wet">wet</option>
+              <option value="ice">icy</option>
+            </select>
+            surface, applying
+            <select data-testid="throttle-intensity-select" class="sentence-select">
+              <option value="light">light</option>
+              <option value="medium" selected>medium</option>
+              <option value="full">full</option>
+            </select>
+            throttle
+            <select data-testid="throttle-timing-select" class="sentence-select">
+              <option value="early" selected>before the apex</option>
+              <option value="mid">at the apex</option>
+              <option value="late">on exit</option>
+            </select>
+            of a
+            <select data-testid="track-shape-select" class="sentence-select">
+              <option value="sweep" selected>sweeping corner</option>
+              <option value="hairpin">hairpin</option>
+            </select>
+            .
+          </p>
+
+          <details class="advanced-setup" data-testid="advanced-setup">
+            <summary>Advanced setup</summary>
+            <label>
+              Corner direction
+              <select data-testid="track-direction-select">
+                <option value="right" selected>Right</option>
+                <option value="left">Left</option>
+              </select>
+            </label>
+          </details>
+
+          <div class="experiment-stage">
+            <canvas data-testid="scene-canvas"></canvas>
+          </div>
+
+          <div class="run-controls">
+            <button type="button" class="run-button" data-testid="start-run">Run experiment</button>
+            <button type="button" class="reset-button" data-testid="reset">Reset</button>
+          </div>
+          <p class="module-result" data-testid="module-result" aria-live="polite"></p>
+
+          <details class="telemetry" data-testid="telemetry">
+            <summary>Telemetry</summary>
+            <section class="panel" aria-live="polite">
+              <h3>State</h3>
+              <p data-testid="state-label" class="state-label" data-state="ready">Ready</p>
+              <p data-testid="state-explanation">Press Run to enter the corner at a steady speed.</p>
+            </section>
             <section class="panel">
-              <h2>Motion</h2>
+              <h3>Motion</h3>
               <p>Speed: <span data-testid="speed">0.0 m/s</span></p>
               <p>Path offset: <span data-testid="path-offset">0.00 m</span></p>
             </section>
-
             <section class="panel">
-              <h2>Axle grip budgets</h2>
+              <h3>Axle grip budgets</h3>
               <div class="axle-row front">
                 <span class="axle-name">Front</span>
-                <span class="meter">
-                  <span class="meter-fill" id="front-meter" data-saturated="false"></span>
-                </span>
                 <span class="axle-value" data-testid="front-utilisation">0%</span>
               </div>
               <div class="axle-row rear">
                 <span class="axle-name">Rear</span>
-                <span class="meter">
-                  <span class="meter-fill" id="rear-meter" data-saturated="false"></span>
-                </span>
                 <span class="axle-value" data-testid="rear-utilisation">0%</span>
               </div>
             </section>
-
             <section class="panel">
-              <h2>G-G display</h2>
-              <div class="gg-display">
-                <canvas id="gg-canvas" width="110" height="110"></canvas>
-                <div class="gg-readouts">
-                  <p>Longitudinal: <span data-testid="longitudinal-g">0.00 g</span></p>
-                  <p>Lateral: <span data-testid="lateral-g">0.00 g</span></p>
-                </div>
-              </div>
+              <h3>G-G display</h3>
+              <p>Longitudinal: <span data-testid="longitudinal-g">0.00 g</span></p>
+              <p>Lateral: <span data-testid="lateral-g">0.00 g</span></p>
             </section>
-          </div>
-
-          <section class="panel">
-            <h2>Experiment settings</h2>
-            <fieldset>
-              <legend>Drivetrain</legend>
-              <div class="option-group" role="group" aria-label="Drivetrain">
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="drivetrain-fwd"
-                  data-drivetrain="FWD"
-                  aria-pressed="false"
-                >
-                  FWD
-                </button>
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="drivetrain-rwd"
-                  data-drivetrain="RWD"
-                  aria-pressed="true"
-                >
-                  RWD
-                </button>
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="drivetrain-awd"
-                  data-drivetrain="AWD"
-                  aria-pressed="false"
-                >
-                  AWD
-                </button>
-              </div>
-            </fieldset>
-            <fieldset>
-              <legend>Surface</legend>
-              <div class="option-group" role="group" aria-label="Surface">
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="surface-dry"
-                  data-surface="dry"
-                  aria-pressed="true"
-                >
-                  Dry
-                </button>
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="surface-wet"
-                  data-surface="wet"
-                  aria-pressed="false"
-                >
-                  Wet
-                </button>
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="surface-ice"
-                  data-surface="ice"
-                  aria-pressed="false"
-                >
-                  Ice
-                </button>
-              </div>
-            </fieldset>
-            <fieldset>
-              <legend>Throttle intensity</legend>
-              <div class="option-group" role="group" aria-label="Throttle intensity">
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="throttle-intensity-light"
-                  data-throttle-intensity="light"
-                  aria-pressed="false"
-                >
-                  Light
-                </button>
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="throttle-intensity-medium"
-                  data-throttle-intensity="medium"
-                  aria-pressed="true"
-                >
-                  Medium
-                </button>
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="throttle-intensity-full"
-                  data-throttle-intensity="full"
-                  aria-pressed="false"
-                >
-                  Full
-                </button>
-              </div>
-            </fieldset>
-            <fieldset>
-              <legend>Throttle timing</legend>
-              <div class="option-group" role="group" aria-label="Throttle timing">
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="throttle-timing-early"
-                  data-throttle-timing="early"
-                  aria-pressed="true"
-                >
-                  Early
-                </button>
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="throttle-timing-mid"
-                  data-throttle-timing="mid"
-                  aria-pressed="false"
-                >
-                  Mid
-                </button>
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="throttle-timing-late"
-                  data-throttle-timing="late"
-                  aria-pressed="false"
-                >
-                  Late
-                </button>
-              </div>
-            </fieldset>
-            <fieldset>
-              <legend>Track</legend>
-              <div class="option-group" role="group" aria-label="Track">
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="track-sweep-left"
-                  data-track="sweep-left"
-                  aria-pressed="false"
-                >
-                  Sweep left
-                </button>
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="track-sweep-right"
-                  data-track="sweep-right"
-                  aria-pressed="true"
-                >
-                  Sweep right
-                </button>
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="track-hairpin-left"
-                  data-track="hairpin-left"
-                  aria-pressed="false"
-                >
-                  Hairpin left
-                </button>
-                <button
-                  type="button"
-                  class="option-button"
-                  data-testid="track-hairpin-right"
-                  data-track="hairpin-right"
-                  aria-pressed="false"
-                >
-                  Hairpin right
-                </button>
-              </div>
-            </fieldset>
-          </section>
+            <section class="panel">
+              <h3>Autosteer / throttle now</h3>
+              <p>Autosteer angle: <span data-testid="steering-value">0%</span></p>
+              <p>Throttle now: <span data-testid="throttle-value">0%</span></p>
+            </section>
+          </details>
 
           <details class="panel" data-testid="model-assumptions">
             <summary>About this model</summary>
             <p>
-              This is a simplified teaching model, not driving instruction. One car, one
-              broad fixed corner, symmetric front/rear load, and a linear tyre model with a
-              friction-circle limit per axle. Steering, throttle, and braking all draw on
-              the same per-axle grip budget; drivetrain only changes which axle carries the
-              longitudinal share — FWD does not always understeer, RWD does not always
-              oversteer, and AWD can still slide if pushed hard enough. Dry/wet/ice are a
-              relative, illustrative grip ordering, not measured coefficients for any real
-              tyre or surface. There is no real-time driving input by design: steering is a
-              fixed autosteer program calibrated to whichever track you pick (the same
-              every run for that track, so it isn't a second variable alongside
-              drivetrain/surface), and throttle intensity/timing/track are the settings
-              you choose before pressing Run. A tighter hairpin demands more lateral
-              force at the same speed than a gentle sweep, so it saturates sooner under
-              otherwise-identical settings — a second, free demonstration of the same
-              shared budget. Every track has a finite, calibrated length; a run finishes
-              when the car reaches the end of it. Pick a combination, run it, then change
-              one setting and run again to compare — that comparison is the whole
-              interaction. Full assumptions and tuned constants are documented in this
-              project's <code>docs/model-assumptions.md</code>.
+              This is a simplified teaching model, not driving instruction. One car, one broad
+              fixed corner, symmetric front/rear load, and a linear tyre model with a
+              friction-circle limit per axle. Steering, throttle, and braking all draw on the
+              same per-axle grip budget; drivetrain only changes which axle carries the
+              longitudinal share — FWD does not always understeer, RWD does not always oversteer,
+              and AWD can still slide if pushed hard enough. Dry/wet/ice are a relative,
+              illustrative grip ordering, not measured coefficients for any real tyre or surface.
+              There is no real-time driving input by design: steering is a fixed autosteer
+              program calibrated to whichever track you pick (the same every run for that track,
+              so it isn't a second variable alongside drivetrain/surface), and throttle
+              intensity/timing/track are the settings you choose before pressing Run. Every track
+              has a finite, calibrated length; a run finishes when the car reaches the end of it.
+              Full assumptions and tuned constants are documented in this project's
+              <code>docs/model-assumptions.md</code>.
             </p>
           </details>
-        </aside>
-      </div>
-
-      <div class="control-bar" data-testid="control-bar">
-        <div class="control-bar-sticky" data-testid="sticky-readouts" aria-hidden="true">
-          <div class="control-bar-sticky-inner">
-            <div class="sticky-state">
-              <p class="state-label sticky-state-label" data-testid="sticky-state-label" data-state="stable">
-                Stable
-              </p>
-              <p class="sticky-speed">Speed: <span data-testid="sticky-speed">0.0 m/s</span></p>
-            </div>
-
-            <div class="sticky-axles">
-              <div class="axle-row front">
-                <span class="axle-name">Front</span>
-                <span class="meter">
-                  <span class="meter-fill" data-testid="sticky-front-meter" data-saturated="false"></span>
-                </span>
-                <span class="axle-value" data-testid="sticky-front-utilisation">0%</span>
-              </div>
-              <div class="axle-row rear">
-                <span class="axle-name">Rear</span>
-                <span class="meter">
-                  <span class="meter-fill" data-testid="sticky-rear-meter" data-saturated="false"></span>
-                </span>
-                <span class="axle-value" data-testid="sticky-rear-utilisation">0%</span>
-              </div>
-            </div>
-
-            <div class="sticky-gg">
-              <canvas data-testid="sticky-gg-canvas" width="70" height="70"></canvas>
-              <div class="gg-readouts">
-                <p>Long: <span data-testid="sticky-longitudinal-g">0.00 g</span></p>
-                <p>Lat: <span data-testid="sticky-lateral-g">0.00 g</span></p>
-              </div>
-            </div>
-          </div>
         </div>
-        <div class="control-bar-main">
-          <button type="button" id="start-run" data-testid="start-run" aria-label="Run — enter the corner">
-            Run
-          </button>
-          <button type="button" id="reset" data-testid="reset">Reset</button>
-          <div class="control-readouts">
-            <span>Autosteer angle: <span data-testid="steering-value">0%</span></span>
-            <span>Throttle now: <span data-testid="throttle-value">0%</span></span>
-          </div>
-        </div>
-      </div>
-    </div>
+      </section>
+    </main>
+
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

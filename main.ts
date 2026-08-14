@@ -1,215 +1,174 @@
-import { createGripScene } from "./src/rendering/scene.ts";
+import { createExperimentController } from "./src/experiments/controller.ts";
+import type { ExperimentSettings, SettingSource } from "./src/experiments/controller.ts";
 import {
-  CAR_PARAMS,
-  controlsForState,
-  createInitialState,
-  DEFAULT_TRACK_ID,
-  FIXED_TIMESTEP,
-  shouldFinish,
-  startRun,
-  step,
-} from "./src/simulation/index.ts";
-import type {
-  DrivetrainId,
-  SimState,
-  SurfaceId,
-  ThrottleIntensityId,
-  ThrottleTimingId,
-  TrackId,
-} from "./src/simulation/index.ts";
-import { createInstruments } from "./src/ui/instruments.ts";
+  module1Conclusion,
+  module2Conclusion,
+  module3Conclusion,
+  module4Conclusion,
+  module5Conclusion,
+  sandboxConclusion,
+} from "./src/experiments/conclusions.ts";
 
-function required<T extends Element>(selector: string): T {
-  const el = document.querySelector<T>(selector);
-  if (!el) throw new Error(`main.ts: missing required element ${selector}`);
+// Builds one independent createExperimentController instance per teaching
+// module plus one for the sandbox — replacing the old single set of
+// module-level globals (see git history). Every module fixes every setting
+// except the one it teaches; the sandbox is the only instance that exposes
+// all five (spec/brief.md).
+
+function requiredRoot(testid: string): HTMLElement {
+  const el = document.querySelector<HTMLElement>(`[data-testid="${testid}"]`);
+  if (!el) throw new Error(`main.ts: missing [data-testid="${testid}"] container`);
   return el;
 }
 
-const startButton = required<HTMLElement>('[data-testid="start-run"]');
-const resetButton = required<HTMLElement>('[data-testid="reset"]');
+// Scroll-progress vignette on the intro: a dependency-free scroll listener
+// sets --intro-shadow (0..1) on #intro_container as the visitor scrolls
+// through its pinned intro, cueing that the first module is about to cover
+// it (src/styles/main.css's #intro::after reads this variable). Under
+// reduced motion this is a single static partial shadow, never re-evaluated
+// per frame, rather than a live scroll-driven animation.
+const introContainer = document.querySelector<HTMLElement>("#intro_container");
+if (introContainer) {
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reducedMotion) {
+    introContainer.style.setProperty("--intro-shadow", "0.35");
+  } else {
+    let ticking = false;
+    const updateShadow = (): void => {
+      ticking = false;
+      const maxScroll = Math.max(1, introContainer.offsetHeight - window.innerHeight);
+      const progress = Math.min(1, Math.max(0, window.scrollY / maxScroll));
+      introContainer.style.setProperty("--intro-shadow", String(progress));
+    };
+    updateShadow();
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(updateShadow);
+      },
+      { passive: true },
+    );
+    window.addEventListener("resize", updateShadow);
+  }
+}
 
-const drivetrainButtons: Array<[DrivetrainId, HTMLButtonElement]> = [
-  ["FWD", required('[data-testid="drivetrain-fwd"]')],
-  ["RWD", required('[data-testid="drivetrain-rwd"]')],
-  ["AWD", required('[data-testid="drivetrain-awd"]')],
-];
-const surfaceButtons: Array<[SurfaceId, HTMLButtonElement]> = [
-  ["dry", required('[data-testid="surface-dry"]')],
-  ["wet", required('[data-testid="surface-wet"]')],
-  ["ice", required('[data-testid="surface-ice"]')],
-];
-const throttleIntensityButtons: Array<[ThrottleIntensityId, HTMLButtonElement]> = [
-  ["light", required('[data-testid="throttle-intensity-light"]')],
-  ["medium", required('[data-testid="throttle-intensity-medium"]')],
-  ["full", required('[data-testid="throttle-intensity-full"]')],
-];
-const throttleTimingButtons: Array<[ThrottleTimingId, HTMLButtonElement]> = [
-  ["early", required('[data-testid="throttle-timing-early"]')],
-  ["mid", required('[data-testid="throttle-timing-mid"]')],
-  ["late", required('[data-testid="throttle-timing-late"]')],
-];
-const trackButtons: Array<[TrackId, HTMLButtonElement]> = [
-  ["sweep-left", required('[data-testid="track-sweep-left"]')],
-  ["sweep-right", required('[data-testid="track-sweep-right"]')],
-  ["hairpin-left", required('[data-testid="track-hairpin-left"]')],
-  ["hairpin-right", required('[data-testid="track-hairpin-right"]')],
-];
+const BASE_SETTINGS: ExperimentSettings = {
+  drivetrain: "RWD",
+  surface: "dry",
+  throttleIntensity: "medium",
+  throttleTiming: "early",
+  track: "sweep-right",
+};
 
-let currentDrivetrain: DrivetrainId = "RWD";
-let currentSurface: SurfaceId = "dry";
-let currentThrottleIntensity: ThrottleIntensityId = "medium";
-let currentThrottleTiming: ThrottleTimingId = "early";
-let currentTrack: TrackId = DEFAULT_TRACK_ID;
-let simState: SimState = createInitialState(
-  currentDrivetrain,
-  currentSurface,
-  currentThrottleIntensity,
-  currentThrottleTiming,
-  currentTrack,
+createExperimentController({
+  root: requiredRoot("module-1"),
+  initialSettings: { ...BASE_SETTINGS },
+  settings: [
+    {
+      kind: "buttons",
+      key: "track",
+      options: [
+        { value: "sweep-right", testid: "track-sweep-right" },
+        { value: "hairpin-right", testid: "track-hairpin-right" },
+      ],
+    },
+  ] satisfies SettingSource[],
+  onFinish: module1Conclusion,
+});
+
+createExperimentController({
+  root: requiredRoot("module-2"),
+  initialSettings: { ...BASE_SETTINGS, throttleIntensity: "full" },
+  settings: [
+    {
+      kind: "buttons",
+      key: "surface",
+      options: [
+        { value: "dry", testid: "surface-dry" },
+        { value: "wet", testid: "surface-wet" },
+        { value: "ice", testid: "surface-ice" },
+      ],
+    },
+  ] satisfies SettingSource[],
+  onFinish: module2Conclusion,
+});
+
+createExperimentController({
+  root: requiredRoot("module-3"),
+  initialSettings: { ...BASE_SETTINGS },
+  settings: [
+    {
+      kind: "buttons",
+      key: "throttleIntensity",
+      options: [
+        { value: "light", testid: "throttle-intensity-light" },
+        { value: "medium", testid: "throttle-intensity-medium" },
+        { value: "full", testid: "throttle-intensity-full" },
+      ],
+    },
+  ] satisfies SettingSource[],
+  onFinish: module3Conclusion,
+});
+
+createExperimentController({
+  root: requiredRoot("module-4"),
+  initialSettings: { ...BASE_SETTINGS, throttleIntensity: "full" },
+  settings: [
+    {
+      kind: "buttons",
+      key: "drivetrain",
+      options: [
+        { value: "FWD", testid: "drivetrain-fwd" },
+        { value: "RWD", testid: "drivetrain-rwd" },
+        { value: "AWD", testid: "drivetrain-awd" },
+      ],
+    },
+  ] satisfies SettingSource[],
+  onFinish: module4Conclusion,
+});
+
+createExperimentController({
+  root: requiredRoot("module-5"),
+  initialSettings: { ...BASE_SETTINGS, throttleIntensity: "full" },
+  settings: [
+    {
+      kind: "buttons",
+      key: "throttleTiming",
+      options: [
+        { value: "early", testid: "throttle-timing-early" },
+        { value: "mid", testid: "throttle-timing-mid" },
+        { value: "late", testid: "throttle-timing-late" },
+      ],
+    },
+  ] satisfies SettingSource[],
+  onFinish: module5Conclusion,
+});
+
+createExperimentController({
+  root: requiredRoot("sandbox"),
+  initialSettings: { ...BASE_SETTINGS },
+  settings: [
+    { kind: "select", key: "drivetrain", testid: "drivetrain-select" },
+    { kind: "select", key: "surface", testid: "surface-select" },
+    { kind: "select", key: "throttleIntensity", testid: "throttle-intensity-select" },
+    { kind: "select", key: "throttleTiming", testid: "throttle-timing-select" },
+    { kind: "track-select-pair", shapeTestid: "track-shape-select", directionTestid: "track-direction-select" },
+  ] satisfies SettingSource[],
+  onFinish: sandboxConclusion,
+});
+
+// The sandbox's own primary button relabels itself after first use
+// (spec/brief.md's "Run experiment" -> "Run again") — a presentational detail
+// the shared controller doesn't need to know about, so it's applied here as a
+// second, independent click listener on the same button rather than plumbed
+// through ExperimentControllerOptions.
+const sandboxStartButton = requiredRoot("sandbox").querySelector<HTMLButtonElement>('[data-testid="start-run"]');
+sandboxStartButton?.addEventListener(
+  "click",
+  () => {
+    sandboxStartButton.textContent = "Run again";
+  },
+  { once: true },
 );
-
-function selectOption<T extends string>(
-  buttons: Array<[T, HTMLButtonElement]>,
-  value: T,
-  apply: (value: T) => void,
-): void {
-  for (const [id, el] of buttons) el.setAttribute("aria-pressed", String(id === value));
-  apply(value);
-}
-
-// Discrete pre-run settings are only editable while a run isn't in
-// progress — mid-run they must stay fixed for the comparison to be fair.
-// Both "ready" and "finished" leave them enabled, so a visitor can change a
-// setting and press Run again without a forced Reset in between.
-function updateSettingButtonsDisabled(): void {
-  const disabled = simState.phase === "running";
-  for (const [, el] of [
-    ...drivetrainButtons,
-    ...surfaceButtons,
-    ...throttleIntensityButtons,
-    ...throttleTimingButtons,
-    ...trackButtons,
-  ]) {
-    el.disabled = disabled;
-  }
-}
-
-const instruments = createInstruments();
-
-const canvas = required<HTMLCanvasElement>('[data-testid="scene-canvas"]');
-let scene: ReturnType<typeof createGripScene> | null = null;
-try {
-  scene = createGripScene(canvas);
-} catch (error) {
-  // A canvas-less browser still gets the full instrument-panel explanation
-  // (CLAUDE.md) — the 2D view is a bonus, not the source of truth.
-  console.warn("2D scene unavailable, continuing with instrument panel only:", error);
-}
-
-const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-let reducedMotion = reducedMotionQuery.matches;
-reducedMotionQuery.addEventListener("change", (event) => {
-  reducedMotion = event.matches;
-});
-
-// Applies a new sim state to the DOM/scene immediately, rather than waiting
-// for the next requestAnimationFrame tick — otherwise a click handler that
-// resets state can race the next paint, occasionally leaving stale numbers
-// on screen for a frame (a real flake caught in e2e on the phone viewport).
-function renderImmediately(): void {
-  instruments.update(simState);
-  scene?.update(simState, reducedMotion);
-  updateSettingButtonsDisabled();
-}
-
-for (const [id, el] of drivetrainButtons) {
-  el.addEventListener("click", () => {
-    currentDrivetrain = id;
-    simState = { ...simState, drivetrain: id };
-    selectOption(drivetrainButtons, id, () => {});
-    renderImmediately();
-  });
-}
-for (const [id, el] of surfaceButtons) {
-  el.addEventListener("click", () => {
-    currentSurface = id;
-    simState = { ...simState, surface: id };
-    selectOption(surfaceButtons, id, () => {});
-    renderImmediately();
-  });
-}
-for (const [id, el] of throttleIntensityButtons) {
-  el.addEventListener("click", () => {
-    currentThrottleIntensity = id;
-    simState = { ...simState, throttleIntensity: id };
-    selectOption(throttleIntensityButtons, id, () => {});
-    renderImmediately();
-  });
-}
-for (const [id, el] of throttleTimingButtons) {
-  el.addEventListener("click", () => {
-    currentThrottleTiming = id;
-    simState = { ...simState, throttleTiming: id };
-    selectOption(throttleTimingButtons, id, () => {});
-    renderImmediately();
-  });
-}
-for (const [id, el] of trackButtons) {
-  el.addEventListener("click", () => {
-    currentTrack = id;
-    simState = { ...simState, track: id };
-    selectOption(trackButtons, id, () => {});
-    renderImmediately();
-  });
-}
-
-startButton.addEventListener("click", () => {
-  // Safe from "ready" or "finished" alike — no forced Reset in between.
-  simState = startRun(simState);
-  accumulator = 0;
-  renderImmediately();
-});
-
-resetButton.addEventListener("click", () => {
-  simState = createInitialState(
-    currentDrivetrain,
-    currentSurface,
-    currentThrottleIntensity,
-    currentThrottleTiming,
-    currentTrack,
-  );
-  accumulator = 0;
-  renderImmediately();
-});
-
-window.addEventListener("resize", () => scene?.resize());
-
-const MAX_STEPS_PER_FRAME = 8; // caps the catch-up if a tab was backgrounded
-let accumulator = 0;
-let lastTime: number | null = null;
-
-function frame(time: number): void {
-  if (lastTime === null) lastTime = time;
-  const dt = Math.min(0.25, (time - lastTime) / 1000);
-  lastTime = time;
-  accumulator += dt;
-
-  let steps = 0;
-  while (accumulator >= FIXED_TIMESTEP && steps < MAX_STEPS_PER_FRAME) {
-    const controls = controlsForState(simState, CAR_PARAMS, FIXED_TIMESTEP);
-    simState = step(simState, controls, FIXED_TIMESTEP);
-    if (simState.phase === "running" && shouldFinish(simState)) {
-      simState = { ...simState, phase: "finished" };
-    }
-    accumulator -= FIXED_TIMESTEP;
-    steps++;
-  }
-  if (steps === MAX_STEPS_PER_FRAME) accumulator = 0;
-
-  instruments.update(simState);
-  scene?.update(simState, reducedMotion);
-  updateSettingButtonsDisabled();
-  requestAnimationFrame(frame);
-}
-
-requestAnimationFrame(frame);
