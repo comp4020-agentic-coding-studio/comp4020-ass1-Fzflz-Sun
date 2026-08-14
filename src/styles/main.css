@@ -41,13 +41,28 @@ a {
   height: 100%;
 }
 
-h1 {
-  font-size: 1rem;
+.brand-title {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
   margin: 0;
-  padding: 0.5rem 0.75rem;
-  font-weight: 600;
+  padding: 0.9rem 1rem;
+  font-size: 1.7rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg-alt);
+}
+
+.brand-logo {
+  width: 2.6rem;
+  height: 2.6rem;
+  flex-shrink: 0;
+
+  /* The source PNG is solid black on a transparent background — invert it to
+     white so the mark reads against this dark theme instead of vanishing
+     into --color-bg-alt. */
+  filter: invert(1);
 }
 
 .main-area {
@@ -81,6 +96,19 @@ h1 {
   gap: 0.9rem;
 }
 
+/* Groups State/Motion/Axle/G-G into one flex item of .sidebar (for the
+   IntersectionObserver in instruments.ts to watch as a single unit). Gap is
+   intentionally tighter than .sidebar's own 0.9rem gap — headroom this group
+   needs to ever be "fully visible" at the 390x844 marking viewport shrank
+   once the header and sticky bar both grew, so this spacing is compressed to
+   make that room back, per the brief's own "compress a secondary display
+   detail" trade-off rather than shrinking the header or sticky bar. */
+.key-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
 .panel {
   background: var(--color-panel);
   border: 1px solid var(--color-border);
@@ -102,19 +130,21 @@ h1 {
   margin: 0 0 0.25rem;
 }
 
-#state-label[data-state="stable"] {
+/* Shared by the real #state-label and its sticky-bar mirror, so both read
+   the same colour for a given driving state. */
+.state-label[data-state="stable"] {
   color: var(--color-text);
 }
 
-#state-label[data-state="understeer"] {
+.state-label[data-state="understeer"] {
   color: var(--color-front);
 }
 
-#state-label[data-state="oversteer"] {
+.state-label[data-state="oversteer"] {
   color: var(--color-rear);
 }
 
-#state-label[data-state="slide"] {
+.state-label[data-state="slide"] {
   color: var(--color-danger);
 }
 
@@ -254,13 +284,113 @@ details.panel p {
 }
 
 .control-bar {
+  position: relative;
   flex: 0 0 auto;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-alt);
+}
+
+/* Rises from the bottom as an absolutely-positioned overlay anchored just
+   above .control-bar-main, not as a layout-flow row — growing it must never
+   shrink .main-area/.sidebar. An earlier version grew this row inside
+   normal flow (pushing .main-area up), which created a real feedback loop
+   at the 390x844 marking viewport: growing the sticky row shrank .sidebar's
+   available height below what the key-info group needs, so once expanded
+   it could never again satisfy "fully visible" and got stuck expanded
+   forever, even scrolled fully back to the top (see git history). The
+   overlay keeps .sidebar's own height constant regardless of this row's
+   state, which removes that circular dependency entirely. The mirrored
+   content includes real meter bars and a mini G-G canvas (not just
+   numbers), so this cap is taller than a single text line — sized to the
+   tallest wrapped layout at the 390x844 marking viewport, verified against
+   measured content height. */
+.control-bar-sticky {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  max-height: 0;
+  overflow: hidden;
+  background: var(--color-bg-alt);
+  box-shadow: 0 -6px 16px rgb(0 0 0 / 30%);
+  transition: max-height 220ms ease;
+
+  /* Purely a read-only mirror (aria-hidden, no interactive children) that
+     now floats on top of whatever .sidebar content is scrolled underneath
+     it — must never intercept clicks meant for that real content. */
+  pointer-events: none;
+}
+
+.control-bar[data-expanded="true"] .control-bar-sticky {
+  max-height: 10rem;
+}
+
+.control-bar-sticky-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sticky-state {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 6.5rem;
+}
+
+.sticky-state-label {
+  font-size: 0.95rem;
+}
+
+.sticky-speed {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.sticky-axles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  flex: 1 1 10rem;
+  min-width: 10rem;
+}
+
+.sticky-axles .axle-row {
+  margin: 0;
+}
+
+.sticky-gg {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.sticky-gg canvas {
+  width: 3.2rem;
+  height: 3.2rem;
+  background: var(--color-bg);
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.sticky-gg .gg-readouts p {
+  margin: 0.1rem 0;
+  font-size: 0.72rem;
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.control-bar-main {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  padding: 0.6rem 0.75rem;
-  border-top: 1px solid var(--color-border);
-  background: var(--color-bg-alt);
+  padding: 0.45rem 0.75rem;
   flex-wrap: wrap;
 }
 
@@ -342,6 +472,10 @@ details.panel p {
 
 @media (prefers-reduced-motion: reduce) {
   .meter-fill {
+    transition: none;
+  }
+
+  .control-bar-sticky {
     transition: none;
   }
 }

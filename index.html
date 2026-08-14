@@ -9,54 +9,59 @@
   <body>
     <div class="app">
       <nav aria-label="Primary"></nav>
-      <h1>Grip is a budget</h1>
+      <h1 class="brand-title">
+        <img src="/assets/brand/slippery-road.png" alt="" class="brand-logo" />
+        <span>Grip is a budget</span>
+      </h1>
       <div class="main-area">
         <div class="stage" data-testid="stage">
           <canvas data-testid="scene-canvas"></canvas>
         </div>
         <aside class="sidebar">
-          <section class="panel" aria-live="polite">
-            <h2>State</h2>
-            <p id="state-label" data-testid="state-label" data-state="stable">Stable</p>
-            <p data-testid="state-explanation" id="state-explanation">
-              Both axles have grip in reserve. Nothing has saturated yet.
-            </p>
-          </section>
+          <div class="key-info" data-testid="key-info">
+            <section class="panel" aria-live="polite">
+              <h2>State</h2>
+              <p id="state-label" data-testid="state-label" data-state="stable" class="state-label">Stable</p>
+              <p data-testid="state-explanation" id="state-explanation">
+                Both axles have grip in reserve. Nothing has saturated yet.
+              </p>
+            </section>
 
-          <section class="panel">
-            <h2>Motion</h2>
-            <p>Speed: <span data-testid="speed">0.0 m/s</span></p>
-            <p>Path offset: <span data-testid="path-offset">0.00 m</span></p>
-          </section>
+            <section class="panel">
+              <h2>Motion</h2>
+              <p>Speed: <span data-testid="speed">0.0 m/s</span></p>
+              <p>Path offset: <span data-testid="path-offset">0.00 m</span></p>
+            </section>
 
-          <section class="panel">
-            <h2>Axle grip budgets</h2>
-            <div class="axle-row front">
-              <span class="axle-name">Front</span>
-              <span class="meter">
-                <span class="meter-fill" id="front-meter" data-saturated="false"></span>
-              </span>
-              <span class="axle-value" data-testid="front-utilisation">0%</span>
-            </div>
-            <div class="axle-row rear">
-              <span class="axle-name">Rear</span>
-              <span class="meter">
-                <span class="meter-fill" id="rear-meter" data-saturated="false"></span>
-              </span>
-              <span class="axle-value" data-testid="rear-utilisation">0%</span>
-            </div>
-          </section>
-
-          <section class="panel">
-            <h2>G-G display</h2>
-            <div class="gg-display">
-              <canvas id="gg-canvas" width="110" height="110"></canvas>
-              <div class="gg-readouts">
-                <p>Longitudinal: <span data-testid="longitudinal-g">0.00 g</span></p>
-                <p>Lateral: <span data-testid="lateral-g">0.00 g</span></p>
+            <section class="panel">
+              <h2>Axle grip budgets</h2>
+              <div class="axle-row front">
+                <span class="axle-name">Front</span>
+                <span class="meter">
+                  <span class="meter-fill" id="front-meter" data-saturated="false"></span>
+                </span>
+                <span class="axle-value" data-testid="front-utilisation">0%</span>
               </div>
-            </div>
-          </section>
+              <div class="axle-row rear">
+                <span class="axle-name">Rear</span>
+                <span class="meter">
+                  <span class="meter-fill" id="rear-meter" data-saturated="false"></span>
+                </span>
+                <span class="axle-value" data-testid="rear-utilisation">0%</span>
+              </div>
+            </section>
+
+            <section class="panel">
+              <h2>G-G display</h2>
+              <div class="gg-display">
+                <canvas id="gg-canvas" width="110" height="110"></canvas>
+                <div class="gg-readouts">
+                  <p>Longitudinal: <span data-testid="longitudinal-g">0.00 g</span></p>
+                  <p>Lateral: <span data-testid="lateral-g">0.00 g</span></p>
+                </div>
+              </div>
+            </section>
+          </div>
 
           <section class="panel">
             <h2>Experiment settings</h2>
@@ -258,14 +263,51 @@
         </aside>
       </div>
 
-      <div class="control-bar">
-        <button type="button" id="start-run" data-testid="start-run" aria-label="Run — enter the corner">
-          Run
-        </button>
-        <button type="button" id="reset" data-testid="reset">Reset</button>
-        <div class="control-readouts">
-          <span>Autosteer angle: <span data-testid="steering-value">0%</span></span>
-          <span>Throttle now: <span data-testid="throttle-value">0%</span></span>
+      <div class="control-bar" data-testid="control-bar">
+        <div class="control-bar-sticky" data-testid="sticky-readouts" aria-hidden="true">
+          <div class="control-bar-sticky-inner">
+            <div class="sticky-state">
+              <p class="state-label sticky-state-label" data-testid="sticky-state-label" data-state="stable">
+                Stable
+              </p>
+              <p class="sticky-speed">Speed: <span data-testid="sticky-speed">0.0 m/s</span></p>
+            </div>
+
+            <div class="sticky-axles">
+              <div class="axle-row front">
+                <span class="axle-name">Front</span>
+                <span class="meter">
+                  <span class="meter-fill" data-testid="sticky-front-meter" data-saturated="false"></span>
+                </span>
+                <span class="axle-value" data-testid="sticky-front-utilisation">0%</span>
+              </div>
+              <div class="axle-row rear">
+                <span class="axle-name">Rear</span>
+                <span class="meter">
+                  <span class="meter-fill" data-testid="sticky-rear-meter" data-saturated="false"></span>
+                </span>
+                <span class="axle-value" data-testid="sticky-rear-utilisation">0%</span>
+              </div>
+            </div>
+
+            <div class="sticky-gg">
+              <canvas data-testid="sticky-gg-canvas" width="70" height="70"></canvas>
+              <div class="gg-readouts">
+                <p>Long: <span data-testid="sticky-longitudinal-g">0.00 g</span></p>
+                <p>Lat: <span data-testid="sticky-lateral-g">0.00 g</span></p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="control-bar-main">
+          <button type="button" id="start-run" data-testid="start-run" aria-label="Run — enter the corner">
+            Run
+          </button>
+          <button type="button" id="reset" data-testid="reset">Reset</button>
+          <div class="control-readouts">
+            <span>Autosteer angle: <span data-testid="steering-value">0%</span></span>
+            <span>Throttle now: <span data-testid="throttle-value">0%</span></span>
+          </div>
         </div>
       </div>
     </div>

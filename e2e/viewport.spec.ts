@@ -59,6 +59,61 @@ for (const viewport of VIEWPORTS) {
       ).toBeLessThanOrEqual(viewport.width);
     });
 
+    test("the sticky quick-reference bar expands once the key-info group scrolls out of .sidebar's view", async ({
+      page,
+    }) => {
+      await page.goto("/");
+      await page.getByTestId("reset").click();
+
+      const controlBar = page.getByTestId("control-bar");
+      await expect(
+        controlBar,
+        "the bar must start collapsed — the key-info group is fully visible before any scrolling",
+      ).toHaveAttribute("data-expanded", "false");
+
+      // How much room .sidebar actually has to scroll: this is real,
+      // viewport-dependent geometry, not a per-viewport branch we chose —
+      // at 390x844 the six sidebar sections overflow .sidebar's height, so
+      // scrolling genuinely pushes the key-info group out of view; at
+      // 1920x1080 they currently all fit without scrolling, so the group
+      // never leaves view and the bar correctly never expands there. Both
+      // are the same IntersectionObserver/CSS exercising real behaviour —
+      // this just asserts whichever outcome that behaviour actually produces
+      // at this viewport, instead of assuming a scroll distance that may not
+      // exist.
+      const canScroll = await page.evaluate(() => {
+        const sidebar = document.querySelector(".sidebar");
+        return sidebar !== null && sidebar.scrollHeight > sidebar.clientHeight;
+      });
+
+      await page.evaluate(() => document.querySelector(".sidebar")?.scrollTo({ top: 999999 }));
+
+      if (canScroll) {
+        await expect(
+          controlBar,
+          "scrolling the key-info group out of view must expand the sticky bar",
+        ).toHaveAttribute("data-expanded", "true");
+        await expect(page.getByTestId("sticky-state-label")).toBeVisible();
+        await expect(page.getByTestId("sticky-speed")).toBeVisible();
+
+        await page.evaluate(() => document.querySelector(".sidebar")?.scrollTo({ top: 0 }));
+        await expect(
+          controlBar,
+          "scrolling the key-info group back into view must collapse the sticky bar again",
+        ).toHaveAttribute("data-expanded", "false");
+      } else {
+        await expect(
+          controlBar,
+          "with nothing to scroll past, the bar must stay collapsed",
+        ).toHaveAttribute("data-expanded", "false");
+      }
+
+      // Run and Reset never move out of the always-visible control bar,
+      // regardless of expanded state.
+      await expect(page.getByTestId("start-run")).toBeVisible();
+      await expect(page.getByTestId("reset")).toBeVisible();
+    });
+
     test("renders the 3D stage visibly on first load, before Run is ever pressed", async ({ page }) => {
       // main.ts's render loop calls scene.update() every frame regardless of
       // run phase, so the chase-cam stage (car/track/environment) is meant to
