@@ -9,7 +9,7 @@ import {
   RUN_START_ZOOM_FACTOR,
 } from "./camera.ts";
 import { simToWorld } from "./coordinates.ts";
-import { buildScenery, buildStaticEnvironment, FOG_FAR_METERS, FOG_NEAR_METERS } from "./environment.ts";
+import { buildScenery, buildStaticEnvironment, FOG_FAR_METERS, FOG_NEAR_METERS } from "./environment/index.ts";
 import { FRONT_COLOR, REAR_COLOR, SKY_HORIZON_COLOR, wheelColor } from "./materials.ts";
 import { SCENE_SCALE } from "./scene-scale.ts";
 import { buildTrackGeometry } from "./track-geometry.ts";

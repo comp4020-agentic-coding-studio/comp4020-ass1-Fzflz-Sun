@@ -83,6 +83,13 @@ export function createFinishMarkerMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color: FINISH_MARKER_COLOR, roughness: 0.9, metalness: 0 });
 }
 
+// vertexColors: true lets ground.ts's per-vertex noise-driven colour
+// (mottling + off-road grass/flower/bush patches) actually render.
+// `color` is left at pure white: THREE.MeshStandardMaterial multiplies
+// vertex colour by `.color`, and ground.ts's per-vertex colours already
+// start from GROUND_COLOR itself — leaving `.color` at GROUND_COLOR too
+// would multiply the tint against itself and darken/desaturate the whole
+// ground rather than just adding variation on top of it.
 export function createGroundMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: GROUND_COLOR, roughness: 1, metalness: 0 });
+  return new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0, vertexColors: true });
 }

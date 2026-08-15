@@ -57,7 +57,7 @@ function collectTintableMaterials(node: THREE.Object3D): THREE.MeshStandardMater
  * drive the car each frame without reaching into Three.js internals
  * itself. */
 export async function loadVehicle(): Promise<Vehicle> {
-  const root = await loadAsset(ASSET_PATHS.vehicle);
+  const root = await loadAsset(ASSET_PATHS.vehicle, "vehicle");
   root.name = "vehicle";
   // sedan.glb's own modelled wheelbase (1.32 m) is smaller than
   // CAR_PARAMS.wheelbaseHalf's simulated one (2.6 m) — see scene-scale.ts

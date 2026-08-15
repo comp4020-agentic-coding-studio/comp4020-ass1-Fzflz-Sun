@@ -12,10 +12,15 @@ export default defineConfig({
   },
   use: {
     baseURL: "http://localhost:4173",
-    actionTimeout: 3_000,
+    actionTimeout: 5_000,
   },
   expect: {
-    timeout: 3_000,
+    timeout: 5_000,
   },
-  timeout: 8_000,
+  // The four-layer scenery (trackside/midground/landmark/distant, ~40 GLBs
+  // per track) takes noticeably longer to settle than the old single-layer
+  // scatter this timeout was tuned for — scrolling through all 6 sections
+  // reliably takes ~11s now, so 8s started failing on load time alone, not
+  // on any actual regression.
+  timeout: 15_000,
 });
