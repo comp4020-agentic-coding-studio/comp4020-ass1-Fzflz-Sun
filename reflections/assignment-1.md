@@ -1,0 +1,9 @@
+# Assignment 1 reflection
+
+## 1. What was the breakthrough that moved the work forward?
+
+The breakthrough was realising that the simulator's main problem was not missing controls or visual detail, but asking visitors to understand the whole system before they understood its claim. The first dashboard exposed track, surface, throttle, timing and drivetrain at once. Taking a cue from *Parable of the Polygons*, I rebuilt it as a scrolling explorable in which each section asks one question and introduces one variable. Because every module owns a deterministic experiment, comparisons no longer depend on driving skill. By the time the final sandbox appears, the visitor has seen how cornering spends grip, surfaces change its size, acceleration shares it and drivetrain decides which axle pays. This made the 3D chase scene support the argument rather than compete with it.
+
+## 2. What did this work change about who I want to be as a software developer?
+
+This work made me want to design the conditions in which coding agents can discover and correct mistakes. Green tests initially missed that the car launched by itself, could not stop and lacked enough steering authority; browser use exposed all three. Later, the Canvas camera was mathematically perspective but still looked flat, so I revised my earlier no-WebGL constraint instead of defending it. Not every problem needed more visual polish: deterministic inputs, motion-level tests, semantic telemetry, measured asset bounds and licences made the result auditable. A prompt is temporary. The durable value is the harness that preserves lessons from failure and the willingness to change it when evidence changes. I want to be a developer who judges generated software by what people can reliably learn from it, not by how quickly it appeared.
