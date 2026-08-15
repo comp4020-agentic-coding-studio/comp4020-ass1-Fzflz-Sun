@@ -309,6 +309,31 @@ the agent from drifting off that idea or breaking the harness that tests it.
   track, never just one direction.** A winding or coordinate-mapping bug
   that only manifests in one direction (see the winding-order rule above)
   is invisible if you only ever reload the default track.
+- **Camera-relative sky geometry (dome/sun disc/clouds) must stay inside
+  the camera frustum for the complete path of every track, and fog
+  distance must never be confused with the camera far plane.** This was a
+  real bug: the sky dome/sun/clouds were built once at the world origin,
+  and `CAMERA_FAR_METERS` was derived purely from `FOG_FAR_METERS + 40` —
+  valid only if nothing visible extends past the fogged region. The chase
+  camera legitimately drifts tens of metres off-centre as it sweeps a
+  corner (`TRACK_PRESETS` radius 40-45m, sweepAngle 90-150°), so once the
+  camera drifted far enough, the far plane clipped straight through the
+  origin-anchored sky, exposing a curved wedge of the flat
+  `scene.background` colour — visible only late in a run, mirrored between
+  left/right tracks. Fog governs when *ground/scenery* fade out; it says
+  nothing about how far the *sky* extends, so sizing the far plane off fog
+  alone is not a valid substitute for checking the sky's own geometry. The
+  fix keeps ground/track/scenery/lights in world space but re-anchors the
+  `"sky"` group to the camera's X/Z every frame (`skyAnchorPosition` in
+  `sky.ts`, applied in `scene.ts`'s `update()`) without ever rebuilding its
+  geometry, and derives `CAMERA_FAR_METERS` from `SKY_RENDER_EXTENT_METERS`
+  (`sky.ts`, the real max of the dome radius, sun disc distance+radius, and
+  cloud cluster worst case) plus a small safety margin — not from
+  `FOG_FAR_METERS`. Never fix a far-plane clipping seam by making the sky
+  `frustumCulled = false`, tweaking `renderOrder`/`depthWrite`, or matching
+  `scene.background` to the sky's own colour — none of those address the
+  camera-to-sky distance actually exceeding the far plane, they only hide
+  the symptom in one specific view.
 - **"The loader resolved" is not proof a glTF material is correct.** A
   failed override can still leave `GLTFLoader`'s promise resolving
   successfully — the bug is in what happened to the material after load,

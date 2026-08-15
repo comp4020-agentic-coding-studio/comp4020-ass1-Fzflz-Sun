@@ -9,7 +9,7 @@ import {
   RUN_START_ZOOM_FACTOR,
 } from "./camera.ts";
 import { simToWorld } from "./coordinates.ts";
-import { buildScenery, buildStaticEnvironment, FOG_FAR_METERS, FOG_NEAR_METERS } from "./environment/index.ts";
+import { buildScenery, buildStaticEnvironment, FOG_FAR_METERS, FOG_NEAR_METERS, SKY_RENDER_EXTENT_METERS, skyAnchorPosition } from "./environment/index.ts";
 import { FRONT_COLOR, REAR_COLOR, SKY_HORIZON_COLOR, wheelColor } from "./materials.ts";
 import { SCENE_SCALE } from "./scene-scale.ts";
 import { buildTrackGeometry } from "./track-geometry.ts";
@@ -46,7 +46,20 @@ const CHASE_DISTANCE_METERS = 6 * SCENE_SCALE;
 const FOCAL_LENGTH_TO_VIEWPORT_HEIGHT_RATIO = 1.15;
 const CAMERA_VERTICAL_FOV_RADIANS = 2 * Math.atan(1 / (2 * FOCAL_LENGTH_TO_VIEWPORT_HEIGHT_RATIO));
 const CAMERA_NEAR_METERS = 0.1;
-const CAMERA_FAR_METERS = FOG_FAR_METERS + 40; // a little past where fog has already fully hidden everything
+// The sky dome/sun disc/cloud layer are camera-relative (re-anchored to the
+// camera's own X/Z every frame via skyAnchorPosition — see update() below),
+// so the camera-to-sky distance is always exactly SKY_RENDER_EXTENT_METERS,
+// never larger, regardless of how far the camera has actually travelled
+// around any track. FOG_FAR_METERS is not a valid basis for this figure: fog
+// only governs when *ground/scenery* fade out, and is far smaller than the
+// sky's own extent — sizing the far plane off fog distance alone (the
+// previous `FOG_FAR_METERS + 40`) let the camera's far plane clip straight
+// through the sky itself once it drifted off-centre on a corner (see
+// CLAUDE.md's camera-relative sky rule). The margin below only needs to
+// absorb floating-point/easing slack right at the sky's own farthest vertex,
+// not fog distance at all.
+const SKY_FAR_PLANE_SAFETY_MARGIN_METERS = 20;
+export const CAMERA_FAR_METERS = SKY_RENDER_EXTENT_METERS + SKY_FAR_PLANE_SAFETY_MARGIN_METERS;
 
 const MAX_DEVICE_PIXEL_RATIO = 2;
 const TRAIL_MAX_POINTS = 40;
@@ -156,6 +169,11 @@ export function createGripScene(canvas: HTMLCanvasElement): GripScene {
   scene.fog = new THREE.Fog(new THREE.Color(SKY_HORIZON_COLOR), FOG_NEAR_METERS, FOG_FAR_METERS);
   const staticEnvironment = buildStaticEnvironment();
   scene.add(staticEnvironment);
+  // The only sub-group of staticEnvironment that ever moves after being
+  // built — see update()'s camera-relative repositioning below. Ground and
+  // the light rig are its other children/siblings and are never touched
+  // here, so they stay world-space.
+  const skyGroup = staticEnvironment.getObjectByName("sky") as THREE.Group | undefined;
 
   const camera = new THREE.PerspectiveCamera(
     THREE.MathUtils.radToDeg(CAMERA_VERTICAL_FOV_RADIANS),
@@ -354,6 +372,17 @@ export function createGripScene(canvas: HTMLCanvasElement): GripScene {
 
     const eye = simToWorld(cameraPose.x, cameraPose.y);
     camera.position.set(eye.x, CAMERA_HEIGHT_METERS, eye.z);
+
+    // Camera-relative sky: re-anchor the whole "sky" group (dome/sun/clouds)
+    // to the camera's current X/Z every frame, never rebuilding its
+    // geometry — this is the fix for the late-run sky-clipping bug (see
+    // CLAUDE.md's camera-relative sky rule and sky.ts's skyAnchorPosition
+    // doc comment). Ground/track/scenery/lights are untouched here and stay
+    // world-space.
+    if (skyGroup) {
+      const anchor = skyAnchorPosition(camera.position.x, camera.position.z);
+      skyGroup.position.set(anchor.x, anchor.y, anchor.z);
+    }
 
     // Look-at target derived directly from the camera's own eased yaw
     // (`cameraPose.rotation`, a sim-space heading — CCW-positive from +x,

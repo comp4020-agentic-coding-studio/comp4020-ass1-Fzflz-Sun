@@ -144,6 +144,29 @@ const CLOUD_COLOR = "#c9ccd6";
 const CLOUD_WARM_COLOR = "#d9c9b0";
 const CLOUD_WARM_FRACTION = 0.4;
 
+// Every visible sky element's own worst-case distance from the sky group's
+// local origin, derived from the real geometry above rather than picked
+// independently of it. This is the basis scene.ts's CAMERA_FAR_METERS must
+// exceed: since the "sky" group is re-anchored to the camera's X/Z every
+// frame (see skyAnchorPosition below, and scene.ts's update()), the
+// camera-to-sky distance is always exactly this figure, never larger,
+// regardless of where the camera has actually travelled to on any track.
+const CLOUD_PUFF_LOCAL_OFFSET_MAX_METERS = Math.hypot(7, 7); // half of each puff's own ±14m local x/z jitter, at its largest
+const CLOUD_PUFF_RADIUS_MAX_METERS = 12; // 6 + rng()*6, at its largest
+const CLOUD_CLUSTER_DISTANCE_MAX_METERS = CLOUD_DISTANCE_METERS * 1; // 0.75 + rng()*0.25, at its largest multiplier of 1
+const CLOUD_MAX_EXTENT_METERS =
+  Math.hypot(CLOUD_CLUSTER_DISTANCE_MAX_METERS, CLOUD_HEIGHT_MAX_METERS) + CLOUD_PUFF_LOCAL_OFFSET_MAX_METERS + CLOUD_PUFF_RADIUS_MAX_METERS;
+const SUN_DISC_MAX_EXTENT_METERS = SUN_DISC_DISTANCE_METERS + SUN_DISC_RADIUS_METERS;
+
+/** The camera-relative sky's own farthest possible vertex, in metres from the
+ * sky group's local origin — the max of the dome's own radius, the sun
+ * disc's distance+radius, and the cloud layer's worst-case cluster
+ * distance+height+puff-jitter+puff-radius. `scene.ts` derives its
+ * `CAMERA_FAR_METERS` from this (plus its own safety margin), not from
+ * `FOG_FAR_METERS`, which governs when *ground/scenery* fade into fog and
+ * has nothing to do with how far the sky itself extends. */
+export const SKY_RENDER_EXTENT_METERS = Math.max(SKY_DOME_RADIUS_METERS, SUN_DISC_MAX_EXTENT_METERS, CLOUD_MAX_EXTENT_METERS);
+
 /** Low-poly static cloud clusters — deliberately never animated (a
  * simplification over the plan's "barely-perceptible drift" suggestion, made
  * to avoid wiring a live per-frame hook through `scene.ts`'s update loop,
@@ -194,6 +217,23 @@ export function buildSky(): THREE.Group {
   group.add(buildSunDisc());
   group.add(buildClouds());
   return group;
+}
+
+/** Pure camera-follow anchor for the "sky" group — `scene.ts`'s `update()`
+ * calls this every frame with the camera's current world X/Z and applies the
+ * result directly to the sky group's position, keeping the dome/sun/clouds
+ * centred on the camera without ever rebuilding their geometry (this is what
+ * fixes the sky-clipping bug: the camera-to-sky distance stays constant
+ * instead of growing as the camera drifts around a corner). Kept standalone
+ * (no `THREE.Camera`/`Object3D` parameter) so the "sky follows camera X/Z"
+ * contract is unit-testable without constructing a renderer. Y is
+ * deliberately left at 0: the sky's own vertical extent (up to 150m of cloud
+ * height) dwarfs any camera height change, so following Y would add
+ * complexity without fixing anything the horizontal follow doesn't already
+ * fix. Ground/track/scenery/lights are siblings of "sky", never children of
+ * it, so they are untouched by this and stay world-space. */
+export function skyAnchorPosition(cameraX: number, cameraZ: number): { x: number; y: number; z: number } {
+  return { x: cameraX, y: 0, z: cameraZ };
 }
 
 /** Sized once from the widest `TRACK_PRESETS` radius (not the

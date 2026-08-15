@@ -15,6 +15,11 @@ import { scatterFenceAccents, scatterPylonMarkers, scatterTrackFurniture, scatte
 export const FOG_NEAR_METERS = 40;
 export const FOG_FAR_METERS = 220;
 
+// Re-exported so scene.ts (the only consumer) reaches the camera-relative
+// sky's public surface through this one module, same as everything else it
+// imports from environment/ — not through sky.ts directly.
+export { skyAnchorPosition, SKY_RENDER_EXTENT_METERS } from "./sky.ts";
+
 /** Sky, ground plane, and the dusk light rig — everything about the backdrop
  * that does not depend on which track is currently selected. Built once per
  * scene lifetime; `scene.ts` adds this group and never rebuilds or disposes
